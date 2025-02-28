@@ -40,6 +40,9 @@ module Network.FTP.Client (
     Handle(..),
     -- * Exceptions
     FTPException(..),
+    -- * System Handle Creation
+    createSIOHandle,
+    createTLSConnection,
     -- * Handle Implementations
     sIOHandleImpl,
     tlsHandleImpl,
