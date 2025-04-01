@@ -43,6 +43,7 @@ module Network.FTP.Client (
     -- * System Handle Creation
     createSIOHandle,
     createTLSConnection,
+    connectTLS,
     -- * Handle Implementations
     sIOHandleImpl,
     tlsHandleImpl,
