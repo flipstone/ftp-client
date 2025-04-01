@@ -302,8 +302,8 @@ loopMultiLine h code lines = do
             $ C.intercalate "\n" lines
         Just nextLine -> do
             let newLines = lines <> [C.dropWhile (== ' ') nextLine]
-                nextCode = C.take 3 nextLine
-            if nextCode == code
+                isLastLine = C.isPrefixOf (code <> " ") nextLine -- Ref for reading multiline response : https://datatracker.ietf.org/doc/html/rfc959#page-36
+            if isLastLine
                 then return newLines
                 else loopMultiLine h code newLines
 
