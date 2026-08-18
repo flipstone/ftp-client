@@ -16,6 +16,7 @@ module Network.FTP.Client (
     dele,
     cwd,
     size,
+    acct,
     mkd,
     rmd,
     pwd,
@@ -38,6 +39,11 @@ module Network.FTP.Client (
     ProtType(..),
     Security(..),
     Handle(..),
+    -- * TLS Commands
+    pbsz,
+    prot,
+    ccc,
+    auth,
     -- * Exceptions
     FTPException(..),
     -- * System Handle Creation
@@ -66,11 +72,10 @@ import Data.Default.Class (def)
 import qualified Data.ByteString.Char8 as C
 import qualified Data.ByteString as B
 import Data.ByteString (ByteString)
-import Data.List
+import Data.List (intercalate)
 import Data.Attoparsec.ByteString.Char8
 import qualified Network.Socket as S
 import qualified System.IO as SIO
-import Data.Monoid ((<>))
 import Control.Exception
 import Control.Monad.Catch (MonadCatch, MonadMask)
 import qualified Control.Monad.Catch as M
@@ -79,12 +84,9 @@ import Control.Monad.IO.Class
 import Data.Bits
 import Network.Connection
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
-import Data.Functor ((<$>))
-import Control.Applicative ((<*>))
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Control.Arrow
-import Data.Typeable
 import System.IO.Error (isEOFError)
 
 debugging :: Bool
@@ -139,7 +141,7 @@ data FTPException
     | UnsuccessfulException FTPResponse
     | BogusResponseFormatException FTPResponse
     | BadProtocolResponseException ByteString
-    deriving (Show, Typeable)
+    deriving (Show)
 
 instance Exception FTPException
 
@@ -206,7 +208,7 @@ formatPort ha pn =
 serializeCommand :: FTPCommand -> String
 serializeCommand (User user)  = "USER " <> user
 serializeCommand (Pass pass)  = "PASS " <> pass
-serializeCommand (Acct acct)  = "ACCT " <> acct
+serializeCommand (Acct account) = "ACCT " <> account
 serializeCommand (RType rt)   = "TYPE " <> serialzeRTypeCode rt
 serializeCommand (Retr file)  = "RETR " <> file
 serializeCommand (Nlst [])    = "NLST"
@@ -267,10 +269,10 @@ getResponse h = do
         Just ('-', _) -> MultiLine <$> loopMultiLine h code [line]
         _ -> return $ SingleLine line
     let codeDroppedMessage = case message of
-            SingleLine message -> SingleLine $ C.drop 4 message
+            SingleLine singleMessage -> SingleLine $ C.drop 4 singleMessage
             MultiLine [] -> MultiLine []
-            MultiLine (message:messages) ->
-                MultiLine $ C.drop 4 message : messages
+            MultiLine (firstMessage:messages) ->
+                MultiLine $ C.drop 4 firstMessage : messages
     let response = FTPResponse
             (responseStatus code)
             (read $ C.unpack code)
@@ -286,7 +288,7 @@ loopMultiLine
     -> ByteString
     -> [ByteString]
     -> m [ByteString]
-loopMultiLine h code lines = do
+loopMultiLine h code priorLines = do
     mNextLine <- liftIO $ getLineRespMaybe h
     case mNextLine of
         -- The server hung up before sending the terminating line. Stop rather
@@ -300,13 +302,13 @@ loopMultiLine h code lines = do
         -- lines of a multiline reply hold arbitrary text, blank lines included,
         -- so a blank line has to be kept and the loop has to continue past it.
         Nothing -> liftIO $ throwIO $ BadProtocolResponseException
-            $ C.intercalate "\n" lines
+            $ C.intercalate "\n" priorLines
         Just nextLine -> do
             -- RFC 959 (https://datatracker.ietf.org/doc/html/rfc959#page-36) ends a
             -- multiline reply with the code followed by a space, and continues it
             -- with the code followed by a hyphen. The bare code is accepted too,
             -- for servers that omit the trailing space on an empty final line.
-            let newLines = lines <> [C.dropWhile (== ' ') nextLine]
+            let newLines = priorLines <> [C.dropWhile (== ' ') nextLine]
                 isLastLine =
                     nextLine == code
                         || C.isPrefixOf (code <> " ") nextLine
@@ -385,9 +387,9 @@ withSocketPassive host portNum f = do
         (createSocket (Just host) portNum hints)
         (liftIO . S.close . fst)
         (\(sock, addr) -> do
-            debugPrint "Connecting"
+            debugPrint ("Connecting" :: String)
             liftIO $ S.connect sock (S.addrAddress addr)
-            debugPrint "Connected"
+            debugPrint ("Connected" :: String)
             f sock
         )
 
@@ -401,10 +403,10 @@ withSocketActive f = do
         (createSocket Nothing 0 hints)
         (liftIO . S.close . fst)
         (\(sock, addr) -> do
-            debugPrint "Binding"
+            debugPrint ("Binding" :: String)
             liftIO $ S.bind sock (S.addrAddress addr)
             liftIO $ S.listen sock 1
-            debugPrint "Listening"
+            debugPrint ("Listening" :: String)
             f sock
         )
 
@@ -471,9 +473,9 @@ withDataSocketActive
     -> m a
 withDataSocketActive h f = withSocketActive $ \socket -> do
     (sPort, sHost) <- liftIO $ do
-      (S.SockAddrInet p h) <- S.getSocketName socket
-      return (p,h)
-    port h sHost sPort
+      (S.SockAddrInet p hostAddr) <- S.getSocketName socket
+      return (p,hostAddr)
+    _ <- port h sHost sPort
     f socket
 
 -- | Open a socket that can be used for data transfers
@@ -527,7 +529,7 @@ withDataCommand
     -> (Handle -> m a)
     -> m a
 withDataCommand ch pa code cmd f = do
-    sendCommandS ch $ RType code
+    _ <- sendCommandS ch $ RType code
     x <- M.bracket
         (createSendDataCommand ch pa cmd)
         (liftIO . SIO.hClose)
@@ -538,32 +540,35 @@ withDataCommand ch pa code cmd f = do
 
 -- | Recieve data and interpret it linewise
 getAllLineResp :: (MonadIO m, MonadCatch m) => Handle -> m ByteString
-getAllLineResp h = getAllLineResp' h []
-    where
-        getAllLineResp' h ret = ( do
+getAllLineResp h =
+    let collect :: (MonadIO n, MonadCatch n) => [ByteString] -> n ByteString
+        collect ret = ( do
             line <- liftIO $ getLineResp h
-            getAllLineResp' h (ret <> [line]))
+            collect (ret <> [line]))
                 `M.catchIOError` (\_ -> return $ C.intercalate "\n" ret)
+    in collect []
 
 -- | Recieve all data and return it as a 'Data.ByteString.ByteString'
 recvAll :: (MonadIO m, MonadCatch m) => Handle -> m ByteString
-recvAll h = recvAll' ""
-    where
-        recvAll' bs = ( do
+recvAll h =
+    let collect :: (MonadIO n, MonadCatch n) => ByteString -> n ByteString
+        collect bs = ( do
             chunk <- liftIO $ recv h defaultChunkSize
             if C.null chunk
                then return bs
-               else recvAll' $ bs <> chunk
+               else collect $ bs <> chunk
             ) `M.catchIOError` (\_ -> return bs)
+    in collect ""
 
 -- TLS connection
 
 connectTLS :: MonadIO m => SIO.Handle -> String -> Int -> m Connection
 connectTLS h host portNum = do
     context <- liftIO initConnectionContext
-    let tlsSettings = def
-            { settingDisableCertificateValidation = True
-            }
+    let tlsSettings = case def of
+            simpleSettings@TLSSettingsSimple{} ->
+                simpleSettings { settingDisableCertificateValidation = True }
+            otherSettings -> otherSettings
         connectionParams = ConnectionParams
             { connectionHostname = host
             , connectionPort = toEnum . fromEnum $ portNum
@@ -581,7 +586,7 @@ createTLSConnection host portNum = do
     h <- createSIOHandle host portNum
     let insecureH = sIOHandleImpl h
     resp <- getResponse insecureH
-    sendCommand insecureH Auth
+    _ <- sendCommand insecureH Auth
     conn <- connectTLS h host portNum
     return (resp, conn)
 
@@ -633,7 +638,7 @@ createTLSSendDataCommand
     -> FTPCommand
     -> m Connection
 createTLSSendDataCommand ch pa cmd = do
-    sendAllS ch [Pbsz 0, Prot P]
+    _ <- sendAllS ch [Pbsz 0, Prot P]
     withDataSocket pa ch $ \socket -> do
         resp <- sendCommand ch cmd
         ensureSucessfulData ch resp
@@ -655,7 +660,7 @@ withTLSDataCommand
     -> (Handle -> m a)
     -> m a
 withTLSDataCommand ch pa code cmd f = do
-    sendCommandS ch $ RType code
+    _ <- sendCommandS ch $ RType code
     x <- M.bracket
         (createTLSSendDataCommand ch pa cmd)
         (liftIO . connectionClose)
@@ -681,7 +686,7 @@ ensureCode resp code =
 
 parse227 :: Parser (String, Int)
 parse227 = do
-    skipWhile (/= '(') *> char '('
+    _ <- skipWhile (/= '(') *> char '('
     [h1,h2,h3,h4,p1,p2] <- many1 digit `sepBy` char ','
     let host = intercalate "." [h1,h2,h3,h4]
         highBits = read p1
@@ -691,7 +696,7 @@ parse227 = do
 
 parse257 :: Parser String
 parse257 = do
-    char '"'
+    _ <- char '"'
     C.unpack <$> takeTill (== '"')
 
 -- Control commands
@@ -837,15 +842,16 @@ parseMlsxLine line =
     in MlsxResponse (C.unpack filename) facts
 
 getMlsxResponse :: (MonadIO m, MonadCatch m) => Handle -> m [MlsxResponse]
-getMlsxResponse h = getMlsxResponse' h []
-    where
-        getMlsxResponse' h ret = ( do
+getMlsxResponse h =
+    let collect :: (MonadIO n, MonadCatch n) => [MlsxResponse] -> n [MlsxResponse]
+        collect ret = ( do
             line <- liftIO $ getLineResp h
-            getMlsxResponse' h $
+            collect $
                 if C.null line
                     then ret
                     else parseMlsxLine line : ret
             ) `M.catchIOError` (\_ -> return ret)
+    in collect []
 
 mlsd :: (MonadIO m, MonadMask m) => Handle -> String -> m [MlsxResponse]
 mlsd h path = withDataCommandSecurity h Passive TA (Mlsd path) getMlsxResponse

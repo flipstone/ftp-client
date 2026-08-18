@@ -1,16 +1,17 @@
+module Main (main) where
+
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as C
 import Test.Hspec
 import Network.FTP.Client hiding (Success)
 import qualified Network.FTP.Client as F
-import Control.Monad.IO.Class
 import Control.Concurrent.MVar
 import System.IO.Error (eofErrorType, mkIOError)
 
 data TestHandleMVars = TestHandleMVars
     { thmSend :: MVar [ByteString]
-    , thmSendLine :: MVar [ByteString]
-    , thmRecv :: MVar [Int]
+    , _thmSendLine :: MVar [ByteString]
+    , _thmRecv :: MVar [Int]
     }
 
 data TestHandle = TestHandle TestHandleMVars Handle
@@ -156,7 +157,7 @@ main = hspec $ do
     describe "Network.FTP.Client.recvAll" $
         it "doesn't hang on empty response" $ do
             let expected = C.pack ""
-            (TestHandle mvars h) <- testHandle [C.pack ""] [] Clear
+            (TestHandle _ h) <- testHandle [C.pack ""] [] Clear
             recvAll h `shouldReturn` expected
 
 isBadProtocolResponse :: FTPException -> Bool

@@ -3,4 +3,12 @@ packages:
   - 'ftp-client-conduit'
   - 'example'
 
+flags:
+  ftp-client:
+    ci: true
+  ftp-client-conduit:
+    ci: true
+  example:
+    ci: true
+
 pvp-bounds: both

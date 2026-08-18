@@ -1,3 +1,5 @@
+{-# LANGUAGE ScopedTypeVariables #-}
+
 {-|
 Module      : Network.FTP.Client
 Description : Transfer files over FTP and FTPS with Conduit
@@ -14,23 +16,21 @@ module Network.FTP.Client.Conduit (
     mlsd
 ) where
 
-import Conduit
-import Control.Monad.IO.Class
+-- MonadResource appears in this module's exported signatures, so it is taken
+-- from resourcet directly rather than through Conduit's re-export. That keeps
+-- the resourcet dependency honest instead of implicit.
+import Conduit hiding (MonadResource)
+import Control.Monad.Trans.Resource (MonadResource)
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
 import System.IO
 import Network.FTP.Client
-    ( sendCommand
-    , sendCommandS
-    , sendAll
-    , sendAllS
+    ( sendCommandS
     , FTPCommand(..)
     , RTypeCode(..)
-    , getLineResp
     , createSendDataCommand
     , createTLSSendDataCommand
     , PortActivity(..)
     , getResponse
-    , getResponseS
     , sIOHandleImpl
     , tlsHandleImpl
     , Security(..)
@@ -40,9 +40,6 @@ import Network.FTP.Client
 import qualified Network.FTP.Client as FTP
 import qualified Data.ByteString as B
 import Data.ByteString (ByteString)
-import Control.Monad.Trans.Resource
-import Data.Monoid ((<>))
-import System.IO.Error
 import Network.Connection
 import qualified Control.Monad.Catch as M
 
@@ -50,17 +47,21 @@ debugging :: Bool
 debugging = False
 
 debugPrint :: (Show a, MonadIO m) => a -> m ()
-debugPrint s = debugPrint' s debugging
-    where
-        debugPrint' _ False = return ()
-        debugPrint' s True = liftIO $ print s
+debugPrint s =
+    if debugging
+        then liftIO $ print s
+        else return ()
 
 debugResponse :: (Show a, MonadIO m) => a -> m ()
 debugResponse s = debugPrint $ "Recieved: " <> (show s)
 
-getAllLineRespC :: MonadIO m => FTP.Handle -> Producer m ByteString
-getAllLineRespC h = loop
-    where
+getAllLineRespC
+    :: forall i m
+     . MonadIO m
+    => FTP.Handle
+    -> ConduitT i ByteString m ()
+getAllLineRespC h =
+    let loop :: ConduitT i ByteString m ()
         loop = do
             line <- liftIO
                 $ FTP.getLineResp h `M.catchIOError` const (return "")
@@ -69,10 +70,15 @@ getAllLineRespC h = loop
                 else do
                     yield line
                     loop
+    in loop
 
-sendAllLineC :: MonadIO m => FTP.Handle -> Consumer ByteString m ()
-sendAllLineC h = loop
-    where
+sendAllLineC
+    :: forall o m
+     . MonadIO m
+    => FTP.Handle
+    -> ConduitT ByteString o m ()
+sendAllLineC h =
+    let loop :: ConduitT ByteString o m ()
         loop = do
             mx <- await
             case mx of
@@ -80,6 +86,7 @@ sendAllLineC h = loop
                 Just x -> do
                     liftIO $ FTP.sendLine h x
                     loop
+    in loop
 
 sourceDataCommandSecurity
     :: MonadResource m
@@ -103,7 +110,7 @@ sourceDataCommand
     -> (FTP.Handle -> ConduitM i o m r)
     -> ConduitM i o m r
 sourceDataCommand ch pa code cmd f = do
-    sendCommandS ch $ RType code
+    _ <- sendCommandS ch $ RType code
     x <- bracketP
         (createSendDataCommand ch pa cmd)
         (liftIO . hClose)
@@ -121,7 +128,7 @@ sourceTLSDataCommand
     -> (FTP.Handle -> ConduitM i o m r)
     -> ConduitM i o m r
 sourceTLSDataCommand ch pa code cmd f = do
-    sendCommandS ch $ RType code
+    _ <- sendCommandS ch $ RType code
     x <- bracketP
         (createTLSSendDataCommand ch pa cmd)
         (liftIO . connectionClose)
@@ -130,9 +137,13 @@ sourceTLSDataCommand ch pa code cmd f = do
     debugResponse resp
     return x
 
-sourceFTPHandle :: MonadIO m => FTP.Handle -> Producer m ByteString
-sourceFTPHandle h = loop
-    where
+sourceFTPHandle
+    :: forall i m
+     . MonadIO m
+    => FTP.Handle
+    -> ConduitT i ByteString m ()
+sourceFTPHandle h =
+    let loop :: ConduitT i ByteString m ()
         loop = do
             bs <- liftIO $ FTP.recv h defaultChunkSize
                 `M.catchIOError` const (return "")
@@ -141,10 +152,15 @@ sourceFTPHandle h = loop
                 else do
                     yield bs
                     loop
+    in loop
 
-sinkFTPHandle :: MonadIO m => FTP.Handle -> Consumer ByteString m ()
-sinkFTPHandle h = loop
-    where
+sinkFTPHandle
+    :: forall o m
+     . MonadIO m
+    => FTP.Handle
+    -> ConduitT ByteString o m ()
+sinkFTPHandle h =
+    let loop :: ConduitT ByteString o m ()
         loop = do
             mbs <- await
             case mbs of
@@ -152,24 +168,25 @@ sinkFTPHandle h = loop
                 Just bs -> do
                     liftIO $ FTP.send h bs
                     loop
+    in loop
 
 sendType
     :: MonadResource m
     => RTypeCode
     -> FTP.Handle
-    -> Consumer ByteString m ()
+    -> ConduitT ByteString o m ()
 sendType TA h = sendAllLineC h
 sendType TI h = sinkFTPHandle h
 
-nlst :: MonadResource m => FTP.Handle -> [String] -> Producer m ByteString
+nlst :: MonadResource m => FTP.Handle -> [String] -> ConduitT i ByteString m ()
 nlst ch args =
     sourceDataCommandSecurity ch Passive TA (Nlst args) getAllLineRespC
 
-retr :: MonadResource m => FTP.Handle -> String -> Producer m ByteString
+retr :: MonadResource m => FTP.Handle -> String -> ConduitT i ByteString m ()
 retr ch path =
     sourceDataCommandSecurity ch Passive TI (Retr path) sourceFTPHandle
 
-list :: MonadResource m => FTP.Handle -> [String] -> Producer m ByteString
+list :: MonadResource m => FTP.Handle -> [String] -> ConduitT i ByteString m ()
 list ch args =
     sourceDataCommandSecurity ch Passive TA (List args) getAllLineRespC
 
@@ -178,7 +195,7 @@ stor
     => FTP.Handle
     -> String
     -> RTypeCode
-    -> Consumer ByteString m ()
+    -> ConduitT ByteString o m ()
 stor ch loc rtype =
     sourceDataCommandSecurity ch Passive rtype (Stor loc) $ sendType rtype
 
@@ -186,7 +203,7 @@ mlsd
     :: MonadResource m
     => FTP.Handle
     -> String
-    -> Producer m FTP.MlsxResponse
+    -> ConduitT i FTP.MlsxResponse m ()
 mlsd ch dir =
     sourceDataCommandSecurity ch Passive TA (Mlsd dir) getAllLineRespC
         .| mapC parseMlsxLine

@@ -10,31 +10,114 @@ category:            Web
 
 git: https://github.com/flipstone/ftp-client
 
+flags:
+  ci:
+    description: More strict ghc options used for development and ci, not intended for end-use.
+    manual: true
+    default: false
+
 executables:
   example-exe:
     main: Main.hs
     source-dirs: app
     language: Haskell2010
-    ghc-options:
-      - -threaded
-      - -rtsopts
-      - -with-rtsopts=-N
     dependencies:
       - base
       - ftp-client
       - ftp-client-conduit
       - conduit
       - bytestring
-      - containers
+    when:
+      - condition: flag(ci)
+        then:
+          ghc-options:
+            - -O2
+            - -threaded
+            - -rtsopts
+            - -with-rtsopts=-N
+            - -Wall
+            - -Werror
+            - -Wcompat
+            - -Widentities
+            - -Winvalid-haddock
+            - -Wmissing-local-signatures
+            - -Wmissing-export-lists
+            - -Wpartial-fields
+            - -Wmissed-specialisations
+            - -Wno-implicit-prelude
+            - -Wno-safe
+            - -Wno-unsafe
+            - -Wunused-packages
+          when:
+            - condition: impl (ghc <= 9.3)
+              ghc-options:
+                - -Wno-unticked-promoted-constructors
+            - condition: impl (ghc >= 9.4)
+              ghc-options:
+                - -Wimplicit-lift
+                - -Woperator-whitespace
+                - -Wredundant-bang-patterns
+                - -Wredundant-strictness-flags
+            - condition: impl (ghc >= 9.8)
+              ghc-options:
+                - -Wincomplete-export-warnings
+                - -Wmissing-poly-kind-signatures
+                - -Wterm-variable-capture
+            - condition: impl (ghc >= 9.10)
+              ghc-options:
+                - -Wdefaulted-exception-context
+        else:
+          ghc-options:
+            - -threaded
+            - -rtsopts
+            - -with-rtsopts=-N
 
 tests:
   example-test:
     main: Spec.hs
     source-dirs: test
     language: Haskell2010
-    ghc-options:
-      - -threaded
-      - -rtsopts
-      - -with-rtsopts=-N
     dependencies:
       - base
+    when:
+      - condition: flag(ci)
+        then:
+          ghc-options:
+            - -threaded
+            - -rtsopts
+            - -with-rtsopts=-N
+            - -Wall
+            - -Werror
+            - -Wcompat
+            - -Widentities
+            - -Winvalid-haddock
+            - -Wmissing-local-signatures
+            - -Wmissing-export-lists
+            - -Wpartial-fields
+            - -Wmissed-specialisations
+            - -Wno-implicit-prelude
+            - -Wno-safe
+            - -Wno-unsafe
+          when:
+            - condition: impl (ghc <= 9.3)
+              ghc-options:
+                - -Wno-unticked-promoted-constructors
+            - condition: impl (ghc >= 9.4)
+              ghc-options:
+                - -Wimplicit-lift
+                - -Woperator-whitespace
+                - -Wredundant-bang-patterns
+                - -Wredundant-strictness-flags
+            - condition: impl (ghc >= 9.8)
+              ghc-options:
+                - -Wincomplete-export-warnings
+                - -Wmissing-poly-kind-signatures
+                - -Wterm-variable-capture
+            - condition: impl (ghc >= 9.10)
+              ghc-options:
+                - -Wdefaulted-exception-context
+        else:
+          ghc-options:
+            - -threaded
+            - -rtsopts
+            - -with-rtsopts=-N

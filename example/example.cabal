@@ -19,21 +19,36 @@ source-repository head
   type: git
   location: https://github.com/flipstone/ftp-client
 
+flag ci
+  description: More strict ghc options used for development and ci, not intended for end-use.
+  manual: True
+  default: False
+
 executable example-exe
   main-is: Main.hs
   other-modules:
       Paths_example
   hs-source-dirs:
       app
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base
     , bytestring
     , conduit
-    , containers
     , ftp-client
     , ftp-client-conduit
   default-language: Haskell2010
+  if flag(ci)
+    ghc-options: -O2 -threaded -rtsopts -with-rtsopts=-N -Wall -Werror -Wcompat -Widentities -Winvalid-haddock -Wmissing-local-signatures -Wmissing-export-lists -Wpartial-fields -Wmissed-specialisations -Wno-implicit-prelude -Wno-safe -Wno-unsafe -Wunused-packages
+    if impl (ghc <= 9.3)
+      ghc-options: -Wno-unticked-promoted-constructors
+    if impl (ghc >= 9.4)
+      ghc-options: -Wimplicit-lift -Woperator-whitespace -Wredundant-bang-patterns -Wredundant-strictness-flags
+    if impl (ghc >= 9.8)
+      ghc-options: -Wincomplete-export-warnings -Wmissing-poly-kind-signatures -Wterm-variable-capture
+    if impl (ghc >= 9.10)
+      ghc-options: -Wdefaulted-exception-context
+  else
+    ghc-options: -threaded -rtsopts -with-rtsopts=-N
 
 test-suite example-test
   type: exitcode-stdio-1.0
@@ -42,7 +57,18 @@ test-suite example-test
       Paths_example
   hs-source-dirs:
       test
-  ghc-options: -threaded -rtsopts -with-rtsopts=-N
   build-depends:
       base
   default-language: Haskell2010
+  if flag(ci)
+    ghc-options: -threaded -rtsopts -with-rtsopts=-N -Wall -Werror -Wcompat -Widentities -Winvalid-haddock -Wmissing-local-signatures -Wmissing-export-lists -Wpartial-fields -Wmissed-specialisations -Wno-implicit-prelude -Wno-safe -Wno-unsafe
+    if impl (ghc <= 9.3)
+      ghc-options: -Wno-unticked-promoted-constructors
+    if impl (ghc >= 9.4)
+      ghc-options: -Wimplicit-lift -Woperator-whitespace -Wredundant-bang-patterns -Wredundant-strictness-flags
+    if impl (ghc >= 9.8)
+      ghc-options: -Wincomplete-export-warnings -Wmissing-poly-kind-signatures -Wterm-variable-capture
+    if impl (ghc >= 9.10)
+      ghc-options: -Wdefaulted-exception-context
+  else
+    ghc-options: -threaded -rtsopts -with-rtsopts=-N
