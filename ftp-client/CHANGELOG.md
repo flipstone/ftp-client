@@ -1,5 +1,19 @@
 # Changelog for ftp-client
 
+## 0.5.2.0
+
+* Expose `createSIOHandle`, `createTLSConnection` and `connectTLS` so callers can
+  manage the handle lifecycle themselves rather than going through `withFTP` and
+  `withFTPS`. Thanks to @pucsdian.
+
+* Fix multiline response parsing. A response was terminated at the first
+  continuation line whose first three bytes matched the response code, so a reply
+  such as `220-First` / `220-Second` / `220 Third` was truncated to two lines. Per
+  [RFC 959](https://datatracker.ietf.org/doc/html/rfc959#page-36) only the code
+  followed by a space ends a multiline reply; the code followed by a hyphen
+  continues it. A final line consisting of the bare code is also accepted, for
+  servers that omit the trailing space. Thanks to @pucsdian.
+
 ## 0.5.1.8
 
 * Fix a crash on short response lines. `getResponse` called `head` on the bytes
