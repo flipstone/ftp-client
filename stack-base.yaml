@@ -1,0 +1,6 @@
+packages:
+  - 'ftp-client'
+  - 'ftp-client-conduit'
+  - 'example'
+
+pvp-bounds: both

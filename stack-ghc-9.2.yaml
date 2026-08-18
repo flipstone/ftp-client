@@ -1,0 +1,15 @@
+<<: !include stack-base.yaml
+
+resolver: lts-20.26
+
+# This LTS predates the crypton fork entirely: it carries cryptonite, so the
+# whole crypton stack has to be supplied, along with a tls new enough for
+# crypton-connection.
+extra-deps:
+  - crypton-connection-0.3.2
+  - crypton-0.34
+  - crypton-x509-1.7.7
+  - crypton-x509-store-1.6.10
+  - crypton-x509-system-1.6.7
+  - crypton-x509-validation-1.6.14
+  - tls-1.8.0

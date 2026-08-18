@@ -1,0 +1,7 @@
+#!/bin/sh
+
+set -o errexit
+
+. scripts/lib/run-in-container.sh
+
+exec bash "$@"

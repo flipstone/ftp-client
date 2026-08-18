@@ -1,0 +1,4 @@
+<<: !include stack-base.yaml
+
+resolver: nightly-2026-08-16
+extra-deps: []

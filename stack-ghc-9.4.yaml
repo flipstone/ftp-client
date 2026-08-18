@@ -1,0 +1,16 @@
+<<: !include stack-base.yaml
+
+resolver: lts-21.25
+
+# crypton-connection is not in this LTS. These are the versions that shipped
+# together in lts-22, which still build against the crypton and asn1 packages
+# this snapshot carries. The newer crypton-x509 1.9 series is avoided on
+# purpose: it wants crypton 1.1 and the crypton-asn1-* rewrite, which would
+# mean replacing most of the snapshot's crypto stack.
+extra-deps:
+  - crypton-connection-0.3.2
+  - crypton-x509-1.7.7
+  - crypton-x509-store-1.6.10
+  - crypton-x509-system-1.6.7
+  - crypton-x509-validation-1.6.14
+  - tls-1.8.0

@@ -1,0 +1,4 @@
+<<: !include stack-base.yaml
+
+resolver: lts-24.12
+extra-deps: []

@@ -1,3 +1,6 @@
-.stack-work
+.stack-work/
+dist-newstyle/
+.env
+test-all-logs/
 *.prof
-stack.yaml.lock
+*~
