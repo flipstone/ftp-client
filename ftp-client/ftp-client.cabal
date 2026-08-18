@@ -1,43 +1,66 @@
-name:                ftp-client
-version:             0.5.1.6
-synopsis:            Transfer files with FTP and FTPS
-description:         ftp-client is a library for communicating with an FTP server. It works over both a clear channel or TLS.
-homepage:            https://github.com/flipstone/ftp-client
-license:             PublicDomain
-maintainer:          Flipstone Technology Partners
-license-file:        LICENSE
-author:              Megan Robinson
-category:            Web
-build-type:          Simple
-extra-source-files:  README.md
-cabal-version:       >=1.10
+cabal-version: 1.12
 
-library
-  hs-source-dirs:      src
-  exposed-modules:     Network.FTP.Client
-  default-language:    Haskell2010
-  default-extensions:  OverloadedStrings
-  build-depends:       base >= 4.8 && < 5
-                     , bytestring >= 0.10.8.2 && < 0.13
-                     , network >= 2.6.3.6 && < 3.3
-                     , attoparsec >= 0.10 && < 0.15
-                     , crypton-connection >= 0.3 && < 0.5
-                     , transformers >= 0.5.6.2 && < 0.7
-                     , exceptions >= 0.10.3 && < 0.11
-                     , containers >= 0.5.11.0 && < 0.8
-                     , data-default-class >= 0.1.2.0 && < 0.3
+-- This file has been generated from package.yaml by hpack version 0.39.1.
+--
+-- see: https://github.com/sol/hpack
 
-test-suite ftp-client-test
-  type:                exitcode-stdio-1.0
-  hs-source-dirs:      test
-  main-is:             test.hs
-  build-depends:       base >=4.11.1.0 && < 5
-                     , bytestring >=0.10.8.2 && <0.13
-                     , hspec >= 2.7
-                     , ftp-client -any
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
-  default-language:    Haskell2010
+name:           ftp-client
+version:        0.5.1.6
+synopsis:       Transfer files with FTP and FTPS
+description:    ftp-client is a library for communicating with an FTP server. It works over both a clear channel or TLS.
+category:       Web
+homepage:       https://github.com/flipstone/ftp-client
+author:         Megan Robinson
+maintainer:     Flipstone Technology Partners
+license:        PublicDomain
+license-file:   LICENSE
+build-type:     Simple
+tested-with:
+    GHC == 9.2.8
+  , GHC == 9.4.8
+  , GHC == 9.6.7
+  , GHC == 9.8.4
+  , GHC == 9.10.3
+  , GHC == 9.12.4
+extra-source-files:
+    README.md
 
 source-repository head
-  type:     git
+  type: git
   location: https://github.com/flipstone/ftp-client
+
+library
+  exposed-modules:
+      Network.FTP.Client
+  other-modules:
+      Paths_ftp_client
+  hs-source-dirs:
+      src
+  default-extensions:
+      OverloadedStrings
+  build-depends:
+      attoparsec >=0.10 && <0.15
+    , base >=4.16 && <5
+    , bytestring >=0.10.8.2 && <0.13
+    , containers >=0.5.11.0 && <0.8
+    , crypton-connection >=0.3 && <0.5
+    , data-default-class >=0.1.2.0 && <0.3
+    , exceptions >=0.10.3 && <0.11
+    , network >=2.6.3.6 && <3.3
+    , transformers >=0.5.6.2 && <0.7
+  default-language: Haskell2010
+
+test-suite ftp-client-test
+  type: exitcode-stdio-1.0
+  main-is: test.hs
+  other-modules:
+      Paths_ftp_client
+  hs-source-dirs:
+      test
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.16 && <5
+    , bytestring >=0.10.8.2 && <0.13
+    , ftp-client
+    , hspec >=2.7
+  default-language: Haskell2010

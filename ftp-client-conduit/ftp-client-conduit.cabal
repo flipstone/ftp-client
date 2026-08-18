@@ -1,39 +1,63 @@
-name:                ftp-client-conduit
-version:             0.5.0.5
-synopsis:            Transfer file with FTP and FTPS with Conduit
-description:         ftp-client is a library for communicating with an FTP server. It works over both a clear channel or TLS. ftp-client-conduit uses conduit to stream files and data in constant space.
-homepage:            https://github.com/flipstone/ftp-client
-maintainer:          Flipstone Technology Partners
-license:             PublicDomain
-license-file:        LICENSE
-author:              Megan Robinson
-category:            Web
-build-type:          Simple
-extra-source-files:  README.md
-cabal-version:       >=1.10
+cabal-version: 1.12
 
-library
-  hs-source-dirs:      src
-  exposed-modules:     Network.FTP.Client.Conduit
-  build-depends:       base >= 4.7 && < 5
-                     , ftp-client == 0.5.*
-                     , conduit >= 1.1
-                     , bytestring
-                     , resourcet >= 1.2 && < 1.3
-                     , crypton-connection >= 0.4 && < 0.5
-                     , exceptions
-  default-language:    Haskell2010
-  default-extensions:  RankNTypes, OverloadedStrings
+-- This file has been generated from package.yaml by hpack version 0.39.1.
+--
+-- see: https://github.com/sol/hpack
 
-test-suite ftp-conduit-test
-  type:                exitcode-stdio-1.0
-  hs-source-dirs:      test
-  main-is:             Spec.hs
-  build-depends:       base >=4.11.1.0 && < 5
-                     , ftp-client-conduit
-  ghc-options:         -threaded -rtsopts -with-rtsopts=-N
-  default-language:    Haskell2010
+name:           ftp-client-conduit
+version:        0.5.0.5
+synopsis:       Transfer file with FTP and FTPS with Conduit
+description:    ftp-client is a library for communicating with an FTP server. It works over both a clear channel or TLS. ftp-client-conduit uses conduit to stream files and data in constant space.
+category:       Web
+homepage:       https://github.com/flipstone/ftp-client
+author:         Megan Robinson
+maintainer:     Flipstone Technology Partners
+license:        PublicDomain
+license-file:   LICENSE
+build-type:     Simple
+tested-with:
+    GHC == 9.2.8
+  , GHC == 9.4.8
+  , GHC == 9.6.7
+  , GHC == 9.8.4
+  , GHC == 9.10.3
+  , GHC == 9.12.4
+extra-source-files:
+    README.md
 
 source-repository head
-  type:     git
+  type: git
   location: https://github.com/flipstone/ftp-client
+
+library
+  exposed-modules:
+      Network.FTP.Client.Conduit
+  other-modules:
+      Paths_ftp_client_conduit
+  hs-source-dirs:
+      src
+  default-extensions:
+      RankNTypes
+      OverloadedStrings
+  build-depends:
+      base >=4.16 && <5
+    , bytestring
+    , conduit >=1.1
+    , crypton-connection >=0.3 && <0.5
+    , exceptions
+    , ftp-client ==0.5.*
+    , resourcet >=1.2 && <1.4
+  default-language: Haskell2010
+
+test-suite ftp-conduit-test
+  type: exitcode-stdio-1.0
+  main-is: Spec.hs
+  other-modules:
+      Paths_ftp_client_conduit
+  hs-source-dirs:
+      test
+  ghc-options: -threaded -rtsopts -with-rtsopts=-N
+  build-depends:
+      base >=4.16 && <5
+    , ftp-client-conduit
+  default-language: Haskell2010
