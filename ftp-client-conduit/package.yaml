@@ -39,11 +39,11 @@ library:
   dependencies:
     - base >= 4.16 && < 5
     - ftp-client == 0.5.*
-    - conduit >= 1.1
-    - bytestring
+    - conduit >= 1.1 && < 1.4
+    - bytestring >= 0.10.8.2 && < 0.13
     - resourcet >= 1.2 && < 1.4
     - crypton-connection >= 0.3 && < 0.5
-    - exceptions
+    - exceptions >= 0.10.3 && < 0.11
   when:
     - condition: flag(ci)
       ghc-options:
