@@ -108,6 +108,43 @@ main = hspec $ do
                 , C.pack "220 Third Line\r\n"
                 ] Clear
             getResponse h `shouldReturn` expected
+        it "keeps reading continuation lines that repeat the code" $ do
+            let expected = FTPResponse
+                    F.Success 220
+                    (MultiLine
+                        [ C.pack "First Line"
+                        , C.pack "220-Second Line"
+                        , C.pack "220 Third Line"
+                        ])
+            (TestHandle _ h) <- testHandle []
+                [ C.pack "220-First Line\r\n"
+                , C.pack "220-Second Line\r\n"
+                , C.pack "220 Third Line\r\n"
+                ] Clear
+            getResponse h `shouldReturn` expected
+        it "ends a multiline response on a bare code" $ do
+            let expected = FTPResponse
+                    F.Success 220
+                    (MultiLine [C.pack "First Line", C.pack "220"])
+            (TestHandle _ h) <- testHandle []
+                [ C.pack "220-First Line\r\n"
+                , C.pack "220\r\n"
+                ] Clear
+            getResponse h `shouldReturn` expected
+        it "does not end a multiline response on a different code" $ do
+            let expected = FTPResponse
+                    F.Success 220
+                    (MultiLine
+                        [ C.pack "First Line"
+                        , C.pack "331 Not the terminator"
+                        , C.pack "220 Done"
+                        ])
+            (TestHandle _ h) <- testHandle []
+                [ C.pack "220-First Line\r\n"
+                , C.pack "331 Not the terminator\r\n"
+                , C.pack "220 Done\r\n"
+                ] Clear
+            getResponse h `shouldReturn` expected
         it "rejects a multiline response the server never finished" $ do
             -- Terminating rather than hanging is only half of it. Handing back
             -- the fragment would report a successful 220 for a greeting that

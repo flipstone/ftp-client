@@ -302,8 +302,14 @@ loopMultiLine h code lines = do
         Nothing -> liftIO $ throwIO $ BadProtocolResponseException
             $ C.intercalate "\n" lines
         Just nextLine -> do
+            -- RFC 959 (https://datatracker.ietf.org/doc/html/rfc959#page-36) ends a
+            -- multiline reply with the code followed by a space, and continues it
+            -- with the code followed by a hyphen. The bare code is accepted too,
+            -- for servers that omit the trailing space on an empty final line.
             let newLines = lines <> [C.dropWhile (== ' ') nextLine]
-                isLastLine = C.isPrefixOf (code <> " ") nextLine -- Ref for reading multiline response : https://datatracker.ietf.org/doc/html/rfc959#page-36
+                isLastLine =
+                    nextLine == code
+                        || C.isPrefixOf (code <> " ") nextLine
             if isLastLine
                 then return newLines
                 else loopMultiLine h code newLines
