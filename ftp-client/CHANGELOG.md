@@ -1,5 +1,16 @@
 # Changelog for ftp-client
 
+## 0.5.3.0
+
+* Export `acct`, `pbsz`, `prot`, `ccc` and `auth`. These command wrappers were
+  defined but never exported, unlike every other command wrapper in the module.
+
+* Drop the `transformers` dependency. The only module it supplied,
+  `Control.Monad.IO.Class`, has been in `base` since 4.9.
+
+* Stop deriving `Typeable` for `FTPException`. It has been a no-op since GHC
+  7.10 and GHC 9.12 warns about it.
+
 ## 0.5.2.0
 
 * Expose `createSIOHandle`, `createTLSConnection` and `connectTLS` so callers can

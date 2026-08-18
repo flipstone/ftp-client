@@ -1,5 +1,14 @@
 # Changelog for ftp-client-conduit
 
+## 0.5.0.7
+
+* Add the missing upper bounds on `bytestring`, `conduit` and `exceptions`.
+
+* Replace conduit's deprecated `Producer` and `Consumer` synonyms with
+  `ConduitT` in the exported signatures of `nlst`, `retr`, `list`, `stor` and
+  `mlsd`. The type variables are left free, so the exported types are unchanged
+  -- `Producer m o` is `forall i. ConduitT i o m ()`, not `ConduitT () o m ()`.
+
 ## 0.5.0.6
 
 * Correct the `resourcet` bound. `>= 1.2 && < 1.3` excluded `resourcet-1.3.0`,
