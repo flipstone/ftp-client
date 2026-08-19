@@ -5,7 +5,7 @@ import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as C
 import Network.FTP.Client hiding (Success)
 import qualified Network.FTP.Client as F
-import System.IO.Error (eofErrorType, mkIOError)
+import System.IO.Error (eofErrorType, fullErrorType, isFullError, mkIOError)
 import Test.Hspec
 
 data TestHandleMVars = TestHandleMVars
@@ -62,6 +62,22 @@ nextScripted what scripted countMVar = do
   case drop i scripted of
     (x : _) -> return x
     [] -> ioError $ mkIOError eofErrorType what Nothing Nothing
+
+{- | A handle whose reads fail the way a reset connection does, rather than the
+way end of input does. The two must not be conflated: end of input is a
+complete transfer, a reset is a truncated one.
+-}
+failingHandle :: Security -> IO Handle
+failingHandle sec = do
+  (TestHandle _ h) <- testHandle [] [] sec
+  return
+    h
+      { recv = \_ -> ioError brokenConnection
+      , recvLine = ioError brokenConnection
+      }
+
+brokenConnection :: IOError
+brokenConnection = mkIOError fullErrorType "connection reset" Nothing Nothing
 
 main :: IO ()
 main = hspec $ do
@@ -205,12 +221,29 @@ main = hspec $ do
           ]
           Clear
       getResponse h `shouldThrow` isBadProtocolResponse
-  describe "Network.FTP.Client.recvAll" $
+  describe "Network.FTP.Client.recvAll" $ do
     it "doesn't hang on empty response" $ do
       let
         expected = C.pack ""
       (TestHandle _ h) <- testHandle [C.pack ""] [] Clear
       recvAll h `shouldReturn` expected
+    it "reports a broken connection instead of a short read" $ do
+      -- A failure part way through a transfer used to be turned into a clean
+      -- end of data, so a truncated download could not be told apart from a
+      -- complete one.
+      h <- failingHandle Clear
+      recvAll h `shouldThrow` isFullError
+  describe "Network.FTP.Client.getAllLineResp" $
+    it "reports a broken connection instead of a truncated listing" $ do
+      h <- failingHandle Clear
+      getAllLineResp h `shouldThrow` isFullError
+  describe "Network.FTP.Client.toNetworkAscii" $ do
+    it "terminates LF input with CRLF" $
+      toNetworkAscii (C.pack "a\nb\n") `shouldBe` C.pack "a\r\nb\r\n"
+    it "leaves CRLF input unchanged rather than doubling the CR" $
+      toNetworkAscii (C.pack "a\r\nb\r\n") `shouldBe` C.pack "a\r\nb\r\n"
+    it "does not append a terminator the input did not have" $
+      toNetworkAscii (C.pack "a\nb") `shouldBe` C.pack "a\r\nb"
 
 isBadProtocolResponse :: FTPException -> Bool
 isBadProtocolResponse e =

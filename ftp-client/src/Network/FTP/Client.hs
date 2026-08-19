@@ -10,6 +10,7 @@ module Network.FTP.Client
   ( -- * Main Entrypoints
     withFTP
   , withFTPS
+  , withFTPSSettings
 
     -- * Control Commands
   , login
@@ -42,13 +43,12 @@ module Network.FTP.Client
   , PortActivity (..)
   , ProtType (..)
   , Security (..)
+  , TLSContext (..)
   , Handle (..)
 
     -- * TLS Commands
   , pbsz
   , prot
-  , ccc
-  , auth
 
     -- * Exceptions
   , FTPException (..)
@@ -69,6 +69,10 @@ module Network.FTP.Client
   , sendAll
   , sendAllS
   , getLineResp
+  , getAllLineResp
+  , getLineRespMaybe
+  , toNetworkAscii
+  , requireTLSContext
   , getResponse
   , getResponseS
   , sendCommandLine
@@ -108,7 +112,25 @@ debugPrint s = Monad.when debugging (MIO.liftIO $ print s)
 debugResponse :: (Show a, MIO.MonadIO m) => a -> m ()
 debugResponse s = debugPrint $ "Recieved: " <> show s
 
-data Security = Clear | TLS
+{- | What a data connection needs in order to be protected the same way the
+control connection is. The host is the one the control connection was opened
+to, which is what the server's certificate is issued for -- deriving it from
+the data socket instead names the local end and can never validate.
+-}
+data TLSContext = TLSContext
+  { tlsContextSettings :: Connection.TLSSettings
+  , tlsContextHost :: String
+  , tlsContextPort :: Int
+  }
+
+-- Only TLS settings are threaded through the connection helpers today. If the
+-- rest of the hardening lands -- ignoring the address in a PASV reply, a
+-- timeout on the active-mode accept, a bound on data-channel line length --
+-- those belong together with these as fields of one options record passed to
+-- the with* functions, rather than as further positional parameters. That was
+-- @qxjit's suggestion on https://github.com/flipstone/ftp-client/pull/1.
+
+data Security = Clear | TLS TLSContext
 
 -- | Can send and recieve a 'Data.ByteString.ByteString'.
 data Handle = Handle
@@ -257,6 +279,14 @@ serializeCommand Pwd = "PWD"
 serializeCommand Abor = "ABOR"
 serializeCommand Pasv = "PASV"
 serializeCommand Quit = "QUIT"
+
+{- | Cap on one reply line. RFC 959 replies are short; this exists so a server
+that never sends a newline cannot make us buffer without limit. Exceeding it
+raises 'Connection.LineTooLong', which is not an 'IOError' and so is not
+swallowed by the end-of-input handling elsewhere in this module.
+-}
+maxReplyLineLength :: Int
+maxReplyLineLength = 65536
 
 stripCLRF :: ByteString -> ByteString
 stripCLRF = C.takeWhile $ (&&) <$> (/= '\r') <*> (/= '\n')
@@ -424,6 +454,9 @@ withSocketPassive host portNum f = do
       S.defaultHints
         { S.addrSocketType = S.Stream
         }
+  -- bracketOnError, not bracket: on success this socket is handed to
+  -- socketToHandle, which takes ownership of the descriptor, so closing it here
+  -- as well would be wrong. Contrast withSocketActive above.
   M.bracketOnError
     (createSocket (Just host) portNum hints)
     (MIO.liftIO . S.close . fst)
@@ -442,7 +475,12 @@ withSocketActive f = do
         { S.addrSocketType = S.Stream
         , S.addrFlags = [S.AI_PASSIVE]
         }
-  M.bracketOnError
+  -- bracket, not bracketOnError: in active mode acceptData returns a *new*
+  -- socket and only that one is converted to a Handle, so ownership of this
+  -- listening socket is never transferred and it must be closed on the success
+  -- path too. The passive helper below is the opposite case and deliberately
+  -- differs.
+  M.bracket
     (createSocket Nothing 0 hints)
     (MIO.liftIO . S.close . fst)
     ( \(sock, addr) -> do
@@ -462,7 +500,8 @@ sIOHandleImpl :: SIO.Handle -> Handle
 sIOHandleImpl h =
   Handle
     { send = C.hPut h
-    , sendLine = C.hPutStrLn h
+    , -- RFC 959 TYPE A data uses CRLF, not a bare LF
+      sendLine = \s -> C.hPut h (s <> "\r\n")
     , recv = C.hGetSome h
     , recvLine = C.hGetLine h
     , security = Clear
@@ -585,6 +624,7 @@ withDataCommand ch pa code cmd f = do
       (createSendDataCommand ch pa cmd)
       (MIO.liftIO . SIO.hClose)
       (f . sIOHandleImpl)
+      `M.onException` drainDataResponse ch
   resp <- getResponse ch
   debugResponse resp
   return x
@@ -593,13 +633,12 @@ withDataCommand ch pa code cmd f = do
 getAllLineResp :: (MIO.MonadIO m, MonadCatch m) => Handle -> m ByteString
 getAllLineResp h =
   let
-    collect :: (MIO.MonadIO n, MonadCatch n) => [ByteString] -> n ByteString
-    collect ret =
-      ( do
-          line <- MIO.liftIO $ getLineResp h
-          collect (ret <> [line])
-      )
-        `M.catchIOError` (\_ -> return $ C.intercalate "\n" ret)
+    collect :: MIO.MonadIO n => [ByteString] -> n ByteString
+    collect ret = do
+      mLine <- MIO.liftIO $ getLineRespMaybe h
+      case mLine of
+        Nothing -> return $ C.intercalate (C.pack "\n") ret
+        Just line -> collect (ret <> [line])
   in
     collect []
 
@@ -610,72 +649,101 @@ recvAll h =
     collect :: (MIO.MonadIO n, MonadCatch n) => ByteString -> n ByteString
     collect bs =
       ( do
+          -- No handler here on purpose. recv returns "" at end of data, so
+          -- catching IOErrors would only turn a reset or timed-out connection
+          -- into a short read that looks like a complete one.
           chunk <- MIO.liftIO $ recv h defaultChunkSize
           if C.null chunk
             then return bs
             else collect $ bs <> chunk
       )
-        `M.catchIOError` (\_ -> return bs)
   in
     collect ""
 
 -- TLS connection
 
-connectTLS :: MIO.MonadIO m => SIO.Handle -> String -> Int -> m Connection.Connection
-connectTLS h host portNum = do
+{- | Wrap an existing handle in TLS. The settings are supplied by the caller;
+'def' validates the server's certificate chain and host name. Passing settings
+with 'Connection.settingDisableCertificateValidation' set gives an encrypted
+but unauthenticated connection, which any on-path attacker can read and rewrite.
+-}
+connectTLS ::
+  MIO.MonadIO m =>
+  Connection.TLSSettings ->
+  SIO.Handle ->
+  String ->
+  Int ->
+  m Connection.Connection
+connectTLS settings h host portNum = do
   context <- MIO.liftIO Connection.initConnectionContext
   let
-    tlsSettings = case def of
-      simpleSettings@Connection.TLSSettingsSimple {} ->
-        simpleSettings {Connection.settingDisableCertificateValidation = True}
-      otherSettings -> otherSettings
     connectionParams =
       Connection.ConnectionParams
         { Connection.connectionHostname = host
         , Connection.connectionPort = toEnum . fromEnum $ portNum
-        , Connection.connectionUseSecure = Just tlsSettings
+        , Connection.connectionUseSecure = Just settings
         , Connection.connectionUseSocks = Nothing
         }
   MIO.liftIO $ Connection.connectFromHandle context h connectionParams
 
 createTLSConnection ::
   (MIO.MonadIO m, MonadMask m) =>
+  Connection.TLSSettings ->
   String ->
   Int ->
   m (FTPResponse, Connection.Connection)
-createTLSConnection host portNum = do
-  h <- createSIOHandle host portNum
-  let
-    insecureH = sIOHandleImpl h
-  resp <- getResponse insecureH
-  _ <- sendCommand insecureH Auth
-  conn <- connectTLS h host portNum
-  return (resp, conn)
+createTLSConnection settings host portNum =
+  -- Without this the socket leaks whenever the greeting is a refusal, AUTH TLS
+  -- is rejected, or the handshake fails. This is the acquire action of
+  -- withTLSHandle's bracket, so its release would never run.
+  M.bracketOnError
+    (createSIOHandle host portNum)
+    (MIO.liftIO . SIO.hClose)
+    ( \h -> do
+        let
+          insecureH = sIOHandleImpl h
+        resp <- getResponse insecureH
+        _ <- sendCommandS insecureH Auth
+        conn <- connectTLS settings h host portNum
+        return (resp, conn)
+    )
 
-tlsHandleImpl :: Connection.Connection -> Handle
-tlsHandleImpl c =
+tlsHandleImpl :: TLSContext -> Connection.Connection -> Handle
+tlsHandleImpl tlsContext c =
   Handle
     { send = Connection.connectionPut c
-    , sendLine = Connection.connectionPut c . (<> "\n")
+    , -- RFC 959 TYPE A data uses CRLF, not a bare LF
+      sendLine = Connection.connectionPut c . (<> "\r\n")
     , recv = Connection.connectionGet c
-    , recvLine = Connection.connectionGetLine maxBound c
-    , security = TLS
+    , recvLine = Connection.connectionGetLine maxReplyLineLength c
+    , security = TLS tlsContext
     }
 
 withTLSHandle ::
   (MonadMask m, MIO.MonadIO m) =>
+  Connection.TLSSettings ->
   String ->
   Int ->
   (Handle -> FTPResponse -> m a) ->
   m a
-withTLSHandle host portNum f =
-  M.bracket
-    (createTLSConnection host portNum)
-    (MIO.liftIO . Connection.connectionClose . snd)
-    (\(resp, conn) -> f (tlsHandleImpl conn) resp)
+withTLSHandle settings host portNum f =
+  let
+    tlsContext =
+      TLSContext
+        { tlsContextSettings = settings
+        , tlsContextHost = host
+        , tlsContextPort = portNum
+        }
+  in
+    M.bracket
+      (createTLSConnection settings host portNum)
+      (MIO.liftIO . Connection.connectionClose . snd)
+      (\(resp, conn) -> f (tlsHandleImpl tlsContext conn) resp)
 
 {- | Takes a host name and port. A handle for interacting with the server
-will be returned in a callback. The commands will be protected with TLS.
+will be returned in a callback. The connection is protected with TLS and the
+server's certificate chain and host name are verified, so a failure to validate
+aborts the connection.
 
 @
 withFTPS "ftps.server.com" 21 $ \h welcome -> do
@@ -683,6 +751,9 @@ withFTPS "ftps.server.com" 21 $ \h welcome -> do
     login h "username" "password"
     print =<< nlst h []
 @
+
+Use 'withFTPSSettings' if you need to talk to a server whose certificate cannot
+be validated.
 -}
 withFTPS ::
   (MonadMask m, MIO.MonadIO m) =>
@@ -690,9 +761,55 @@ withFTPS ::
   Int ->
   (Handle -> FTPResponse -> m a) ->
   m a
-withFTPS = withTLSHandle
+withFTPS = withTLSHandle def
+
+{- | As 'withFTPS', but with caller supplied TLS settings.
+
+Setting 'Connection.settingDisableCertificateValidation' accepts any
+certificate, including one an attacker generated. The connection is then
+encrypted but not authenticated: anyone on the network path can read the
+credentials sent by 'login' and alter transferred data. Only do this when you
+have another way to establish that the peer is who it claims to be.
+
+@
+let insecure = 'def' { 'Connection.settingDisableCertificateValidation' = True }
+withFTPSSettings insecure "ftps.server.com" 21 $ \h welcome -> do
+    print welcome
+@
+-}
+withFTPSSettings ::
+  (MonadMask m, MIO.MonadIO m) =>
+  Connection.TLSSettings ->
+  String ->
+  Int ->
+  (Handle -> FTPResponse -> m a) ->
+  m a
+withFTPSSettings = withTLSHandle
 
 -- TLS data connection
+
+{- | The TLS details of a control connection, for reproducing them on a data
+connection.
+-}
+requireTLSContext :: MIO.MonadIO m => Handle -> m TLSContext
+requireTLSContext h =
+  case security h of
+    TLS ctx -> return ctx
+    Clear ->
+      MIO.liftIO . Exception.throwIO . BadProtocolResponseException $
+        C.pack "cannot open a TLS data connection over a clear control connection"
+
+{- | Read the reply that terminates a data transfer, discarding any failure.
+
+Used on the paths where the transfer did not complete normally. The reply still
+has to be taken off the control connection: left there it becomes the answer to
+whichever command is sent next, and every reply after that belongs to the
+previous command for the rest of the session. Failures are swallowed so this
+cannot mask the exception that brought us here.
+-}
+drainDataResponse :: (MIO.MonadIO m, MonadCatch m) => Handle -> m ()
+drainDataResponse ch =
+  Monad.void (getResponse ch) `M.catchAll` (\_ -> return ())
 
 {- | Send setup commands to the server and
 create a data TLS connection
@@ -704,19 +821,29 @@ createTLSSendDataCommand ::
   FTPCommand ->
   m Connection.Connection
 createTLSSendDataCommand ch pa cmd = do
+  tlsContext <- requireTLSContext ch
   _ <- sendAllS ch [Pbsz 0, Prot P]
   withDataSocket pa ch $ \socket -> do
     resp <- sendCommand ch cmd
     ensureSucessfulData ch resp
     acceptedSock <- acceptData pa socket
-    (sPort, sHost) <- MIO.liftIO $ do
-      (S.SockAddrInet p h) <- S.getSocketName acceptedSock
-      return (p, h)
-    let
-      (h1, h2, h3, h4) = S.hostAddressToTuple sHost
-      hostName = intercalate "." $ show . fromEnum <$> [h1, h2, h3, h4]
-    h <- MIO.liftIO $ S.socketToHandle acceptedSock SIO.ReadWriteMode
-    MIO.liftIO $ connectTLS h hostName (fromEnum sPort)
+    -- socketToHandle invalidates the socket, so the enclosing bracketOnError's
+    -- close becomes a no-op from here on; protect the handle separately or a
+    -- failed handshake leaks the descriptor.
+    M.bracketOnError
+      (MIO.liftIO $ S.socketToHandle acceptedSock SIO.ReadWriteMode)
+      (MIO.liftIO . SIO.hClose)
+      ( \h ->
+          -- Authenticate against the host the control connection was opened to.
+          -- getSocketName here would name the local end of the data socket,
+          -- which no server certificate can ever match.
+          MIO.liftIO $
+            connectTLS
+              (tlsContextSettings tlsContext)
+              h
+              (tlsContextHost tlsContext)
+              (tlsContextPort tlsContext)
+      )
 
 withTLSDataCommand ::
   (MIO.MonadIO m, MonadMask m) =>
@@ -727,12 +854,14 @@ withTLSDataCommand ::
   (Handle -> m a) ->
   m a
 withTLSDataCommand ch pa code cmd f = do
+  tlsContext <- requireTLSContext ch
   _ <- sendCommandS ch $ RType code
   x <-
     M.bracket
       (createTLSSendDataCommand ch pa cmd)
       (MIO.liftIO . Connection.connectionClose)
-      (f . tlsHandleImpl)
+      (f . tlsHandleImpl tlsContext)
+      `M.onException` drainDataResponse ch
   resp <- getResponse ch
   debugPrint $ "Recieved: " <> show resp
   return x
@@ -855,16 +984,32 @@ pbsz h = sendCommandS h . Pbsz
 prot :: MIO.MonadIO m => Handle -> ProtType -> m FTPResponse
 prot h = sendCommandS h . Prot
 
-ccc :: MIO.MonadIO m => Handle -> m FTPResponse
-ccc h = sendCommandS h Ccc
-
-auth :: MIO.MonadIO m => Handle -> m FTPResponse
-auth h = sendCommandS h Auth
+-- CCC and AUTH deliberately have no wrappers. CCC tells the server to drop to
+-- cleartext, but there is no way to downgrade our side of a
+-- crypton-connection, so the control connection would desynchronise and
+-- 'security' could not be corrected to match. AUTH on its own tells the server
+-- to expect a handshake that never happens; 'createTLSConnection' is the only
+-- sequence that issues it correctly. Both remain reachable as 'FTPCommand'
+-- constructors for anyone who needs to drive them by hand.
 
 -- Data commands
 
+{- | Rewrite line endings for a TYPE A transfer. RFC 959 specifies NVT-ASCII,
+whose terminator is CRLF. Input already using CRLF is left alone rather than
+having its CR doubled, and input with no final terminator does not gain one.
+-}
+toNetworkAscii :: ByteString -> ByteString
+toNetworkAscii =
+  let
+    dropTrailingCR piece =
+      if not (C.null piece) && C.last piece == '\r'
+        then C.init piece
+        else piece
+  in
+    C.intercalate (C.pack "\r\n") . fmap dropTrailingCR . C.split '\n'
+
 sendType :: MIO.MonadIO m => RTypeCode -> ByteString -> Handle -> m ()
-sendType TA dat h = mapM_ (sendCommandLine h) $ C.split '\n' dat
+sendType TA dat h = MIO.liftIO . send h $ toNetworkAscii dat
 sendType TI dat h = MIO.liftIO $ send h dat
 
 withDataCommandSecurity ::
@@ -878,7 +1023,7 @@ withDataCommandSecurity ::
 withDataCommandSecurity h =
   case security h of
     Clear -> withDataCommand h
-    TLS -> withTLSDataCommand h
+    TLS _ -> withTLSDataCommand h
 
 nlst :: (MIO.MonadIO m, MonadMask m) => Handle -> [String] -> m ByteString
 nlst h args = withDataCommandSecurity h Passive TA (Nlst args) getAllLineResp
@@ -927,16 +1072,16 @@ parseMlsxLine line =
 getMlsxResponse :: (MIO.MonadIO m, MonadCatch m) => Handle -> m [MlsxResponse]
 getMlsxResponse h =
   let
-    collect :: (MIO.MonadIO n, MonadCatch n) => [MlsxResponse] -> n [MlsxResponse]
-    collect ret =
-      ( do
-          line <- MIO.liftIO $ getLineResp h
+    collect :: MIO.MonadIO n => [MlsxResponse] -> n [MlsxResponse]
+    collect ret = do
+      mLine <- MIO.liftIO $ getLineRespMaybe h
+      case mLine of
+        Nothing -> return ret
+        Just line ->
           collect $
             if C.null line
               then ret
               else parseMlsxLine line : ret
-      )
-        `M.catchIOError` (\_ -> return ret)
   in
     collect []
 

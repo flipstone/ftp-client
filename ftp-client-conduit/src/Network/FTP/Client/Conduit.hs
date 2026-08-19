@@ -23,6 +23,7 @@ module Network.FTP.Client.Conduit
 
 import Conduit ((.|))
 import qualified Conduit
+import qualified Control.Monad as Monad
 import qualified Control.Monad.IO.Class as MIO
 import Control.Monad.Trans.Resource (MonadResource)
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
@@ -35,15 +36,16 @@ import Network.FTP.Client
   , createTLSSendDataCommand
   , getResponse
   , parseMlsxLine
+  , requireTLSContext
   , sIOHandleImpl
   , sendCommandS
   , tlsHandleImpl
   )
 import qualified System.IO as SIO
 
-import qualified Control.Monad.Catch as M
 import Data.ByteString (ByteString)
 import qualified Data.ByteString as B
+import qualified Data.ByteString.Char8 as C
 import qualified Network.Connection as Connection
 import qualified Network.FTP.Client as FTP
 
@@ -68,13 +70,16 @@ getAllLineRespC h =
   let
     loop :: Conduit.ConduitT i ByteString m ()
     loop = do
-      line <-
-        MIO.liftIO $
-          FTP.getLineResp h `M.catchIOError` const (return "")
-      if B.null line
-        then return ()
-        else do
-          Conduit.yield line
+      -- End of input is signalled by getLineRespMaybe returning Nothing. A
+      -- blank line is reply content, not a terminator: treating it as one
+      -- silently dropped the rest of a listing and the caller still saw the
+      -- normal 226. Any other IO failure propagates rather than masquerading
+      -- as a complete transfer.
+      mLine <- MIO.liftIO $ FTP.getLineRespMaybe h
+      case mLine of
+        Nothing -> return ()
+        Just line -> do
+          Monad.unless (B.null line) $ Conduit.yield line
           loop
   in
     loop
@@ -86,16 +91,25 @@ sendAllLineC ::
   Conduit.ConduitT ByteString o m ()
 sendAllLineC h =
   let
-    loop :: Conduit.ConduitT ByteString o m ()
-    loop = do
+    loop :: ByteString -> Conduit.ConduitT ByteString o m ()
+    loop carry = do
       mx <- Conduit.await
       case mx of
-        Nothing -> return ()
+        Nothing ->
+          -- Trailing bytes with no final newline: send them as-is rather than
+          -- inventing a terminator the input did not have.
+          Monad.unless (B.null carry) . MIO.liftIO $
+            FTP.send h (FTP.toNetworkAscii carry)
         Just x -> do
-          MIO.liftIO $ FTP.sendLine h x
-          loop
+          let
+            -- Hold back whatever follows the last newline; the rest of that
+            -- line may be in the next chunk.
+            (complete, rest) = C.breakEnd (== '\n') (carry <> x)
+          Monad.unless (B.null complete) . MIO.liftIO $
+            FTP.send h (FTP.toNetworkAscii complete)
+          loop rest
   in
-    loop
+    loop ""
 
 sourceDataCommandSecurity ::
   MonadResource m =>
@@ -108,7 +122,7 @@ sourceDataCommandSecurity ::
 sourceDataCommandSecurity h =
   case FTP.security h of
     Clear -> sourceDataCommand h
-    TLS -> sourceTLSDataCommand h
+    TLS _ -> sourceTLSDataCommand h
 
 sourceDataCommand ::
   MonadResource m =>
@@ -120,14 +134,17 @@ sourceDataCommand ::
   Conduit.ConduitM i o m r
 sourceDataCommand ch pa code cmd f = do
   _ <- sendCommandS ch $ RType code
-  x <-
-    Conduit.bracketP
-      (createSendDataCommand ch pa cmd)
-      (MIO.liftIO . SIO.hClose)
-      (f . sIOHandleImpl)
-  resp <- getResponse ch
-  debugResponse resp
-  return x
+  -- Reading the completion reply is part of releasing the data connection, not
+  -- a later statement. Downstream terminating early -- takeC, headC, any short
+  -- circuit -- abandons this pipeline, and a reply left unread becomes the
+  -- answer to the next command for the rest of the session.
+  Conduit.bracketP
+    (createSendDataCommand ch pa cmd)
+    ( \dataHandle -> do
+        SIO.hClose dataHandle
+        getResponse ch >>= debugResponse
+    )
+    (f . sIOHandleImpl)
 
 sourceTLSDataCommand ::
   MonadResource m =>
@@ -138,15 +155,15 @@ sourceTLSDataCommand ::
   (FTP.Handle -> Conduit.ConduitM i o m r) ->
   Conduit.ConduitM i o m r
 sourceTLSDataCommand ch pa code cmd f = do
+  tlsContext <- requireTLSContext ch
   _ <- sendCommandS ch $ RType code
-  x <-
-    Conduit.bracketP
-      (createTLSSendDataCommand ch pa cmd)
-      (MIO.liftIO . Connection.connectionClose)
-      (f . tlsHandleImpl)
-  resp <- getResponse ch
-  debugResponse resp
-  return x
+  Conduit.bracketP
+    (createTLSSendDataCommand ch pa cmd)
+    ( \conn -> do
+        Connection.connectionClose conn
+        getResponse ch >>= debugResponse
+    )
+    (f . tlsHandleImpl tlsContext)
 
 sourceFTPHandle ::
   forall i m.
@@ -157,10 +174,7 @@ sourceFTPHandle h =
   let
     loop :: Conduit.ConduitT i ByteString m ()
     loop = do
-      bs <-
-        MIO.liftIO $
-          FTP.recv h defaultChunkSize
-            `M.catchIOError` const (return "")
+      bs <- MIO.liftIO $ FTP.recv h defaultChunkSize
       if B.null bs
         then return ()
         else do
