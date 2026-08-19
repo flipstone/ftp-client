@@ -64,6 +64,27 @@ jobs:
       - name: Build and test
         run: ./scripts/test --stack-yaml ${{ matrix.stack-yaml }}
 
+  formatting-check:
+    name: Formatting Check
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      # Nothing is compiled here, so there is no stack-root worth caching. The
+      # setup is still needed to establish the docker environment the scripts
+      # run in.
+      - name: Setup Stack (for docker env)
+        uses: flipstone/github-actions/setup-dockerized-stack@2c1f2781f8a1b92a0ad82223adf77bbf24b262c2
+        with:
+          stack-root: ./stack-root
+
+      - name: Format and Check for Diff
+        run: ./scripts/format-repo
+
   cabal-check:
     name: Cabal Check
     if: >-
