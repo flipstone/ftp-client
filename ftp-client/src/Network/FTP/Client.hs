@@ -81,6 +81,7 @@ import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import Control.Arrow
 import Data.Typeable
+import System.IO.Error (isEOFError)
 
 debugging :: Bool
 debugging = False
@@ -237,15 +238,30 @@ stripCLRF = C.takeWhile $ (&&) <$> (/= '\r') <*> (/= '\n')
 getLineResp :: Handle -> IO ByteString
 getLineResp h = stripCLRF <$> recvLine h
 
+-- | Get a line from the server, returning 'Nothing' once the stream is
+-- exhausted. A blank line and end of input are different things: 'recvLine'
+-- signals end of input by throwing, and an empty 'ByteString' is a legitimate
+-- line of reply text.
+getLineRespMaybe :: Handle -> IO (Maybe ByteString)
+getLineRespMaybe h =
+    (Just <$> getLineResp h) `M.catchIOError` \e ->
+        if isEOFError e
+            then return Nothing
+            else ioError e
+
 -- | Get a full response from the server
 -- Used in 'sendCommand'
 getResponse :: MonadIO m => Handle -> m FTPResponse
 getResponse h = do
     line <- liftIO $ getLineResp h
     let (code, rest) = C.splitAt 3 line
-    message <- if C.head rest == '-'
-        then MultiLine <$> loopMultiLine h code [line]
-        else return $ SingleLine line
+    -- A response must open with a three digit code. Checking that up front keeps
+    -- the 'C.uncons' below and the 'read' further down from being partial.
+    when (C.length code < 3 || not (C.all isDigit code))
+        $ liftIO $ throwIO $ BadProtocolResponseException line
+    message <- case C.uncons rest of
+        Just ('-', _) -> MultiLine <$> loopMultiLine h code [line]
+        _ -> return $ SingleLine line
     let codeDroppedMessage = case message of
             SingleLine message -> SingleLine $ C.drop 4 message
             MultiLine [] -> MultiLine []
@@ -267,12 +283,20 @@ loopMultiLine
     -> [ByteString]
     -> m [ByteString]
 loopMultiLine h code lines = do
-    nextLine <- liftIO $ getLineResp h
-    let newLines = lines <> [C.dropWhile (== ' ') nextLine]
-        nextCode = C.take 3 nextLine
-    if nextCode == code
-        then return newLines
-        else loopMultiLine h code newLines
+    mNextLine <- liftIO $ getLineRespMaybe h
+    case mNextLine of
+        -- The server hung up before sending the terminating line. Return what
+        -- was collected rather than looping forever. Note this is end of input,
+        -- not a blank line: RFC 959 lets the intermediate lines of a multiline
+        -- reply hold arbitrary text, blank lines included, so a blank line has
+        -- to be kept and the loop has to continue past it.
+        Nothing -> return lines
+        Just nextLine -> do
+            let newLines = lines <> [C.dropWhile (== ' ') nextLine]
+                nextCode = C.take 3 nextLine
+            if nextCode == code
+                then return newLines
+                else loopMultiLine h code newLines
 
 ensureSuccess :: MonadIO m => FTPResponse -> m FTPResponse
 ensureSuccess resp =
