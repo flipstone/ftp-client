@@ -1,0 +1,10 @@
+[forAnyModule]
+allowedOpenUnaliasedImports = 1
+moduleHeaderCopyrightMustExistNonEmpty = true
+moduleHeaderDescriptionMustExistNonEmpty = false
+moduleHeaderLicenseMustExistNonEmpty = true
+moduleHeaderMaintainerMustExistNonEmpty = false
+[[forPatternModules]]
+pattern = "Paths_*"
+[forPatternModules.rulesToIgnore]
+all = true

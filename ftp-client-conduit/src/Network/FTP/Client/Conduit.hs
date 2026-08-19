@@ -1,8 +1,9 @@
 {-# LANGUAGE ScopedTypeVariables #-}
 
 {-|
-Module      : Network.FTP.Client
+Module      : Network.FTP.Client.Conduit
 Description : Transfer files over FTP and FTPS with Conduit
+Copyright   : Megan Robinson 2018-2019, Flipstone Technology Partners 2024-2026
 License     : Public Domain
 Stability   : experimental
 Portability : POSIX
@@ -22,7 +23,7 @@ module Network.FTP.Client.Conduit (
 import Conduit hiding (MonadResource)
 import Control.Monad.Trans.Resource (MonadResource)
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
-import System.IO
+import qualified System.IO as SIO
 import Network.FTP.Client
     ( sendCommandS
     , FTPCommand(..)
@@ -40,7 +41,7 @@ import Network.FTP.Client
 import qualified Network.FTP.Client as FTP
 import qualified Data.ByteString as B
 import Data.ByteString (ByteString)
-import Network.Connection
+import qualified Network.Connection as Connection
 import qualified Control.Monad.Catch as M
 
 debugging :: Bool
@@ -113,7 +114,7 @@ sourceDataCommand ch pa code cmd f = do
     _ <- sendCommandS ch $ RType code
     x <- bracketP
         (createSendDataCommand ch pa cmd)
-        (liftIO . hClose)
+        (liftIO . SIO.hClose)
         (f . sIOHandleImpl)
     resp <- getResponse ch
     debugResponse resp
@@ -131,7 +132,7 @@ sourceTLSDataCommand ch pa code cmd f = do
     _ <- sendCommandS ch $ RType code
     x <- bracketP
         (createTLSSendDataCommand ch pa cmd)
-        (liftIO . connectionClose)
+        (liftIO . Connection.connectionClose)
         (f . tlsHandleImpl)
     resp <- getResponse ch
     debugResponse resp

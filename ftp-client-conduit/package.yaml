@@ -82,6 +82,11 @@ library:
         - condition: impl (ghc >= 9.10)
           ghc-options:
             - -Wdefaulted-exception-context
+        - condition: impl (ghc >= 9.6)
+          dependencies:
+            - henforcer
+          ghc-options:
+            - -fplugin Henforcer
 
 tests:
   ftp-conduit-test:

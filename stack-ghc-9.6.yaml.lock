@@ -3,7 +3,35 @@
 # For more information, please see the documentation at:
 #   https://docs.haskellstack.org/en/stable/topics/lock_files
 
-packages: []
+packages:
+- completed:
+    hackage: henforcer-1.0.0.1@sha256:69f1c0140122505f3daf2ef2aef4b100ced6579fd741b6f191d3ef4c5e99b8c5,4632
+    pantry-tree:
+      sha256: 9374d76092216baaf986c4538161e5ca4711c944c3915b7f45fbf29ff28ddd98
+      size: 3049
+  original:
+    hackage: henforcer-1.0.0.1
+- completed:
+    hackage: pollock-0.1.0.3@sha256:0c245280f8b7813357c14663b2ab456e3c3998cd6beb2d5cca53741ca9589285,3969
+    pantry-tree:
+      sha256: 88b5bcf2aecd3e3768d5813b80dab7b2d5c19b9a73e6760aec247a6fd19c6ecf
+      size: 1182
+  original:
+    hackage: pollock-0.1.0.3
+- completed:
+    hackage: tomland-1.3.3.3@sha256:459e5bf268552e5e582e2d3df895dc41db618bb6306576d536b600cc5729de8f,9404
+    pantry-tree:
+      sha256: 0caf0f2c5f19c16625556b049285a02850912569a4bc26831c04b3a1e388bc67
+      size: 6430
+  original:
+    hackage: tomland-1.3.3.3
+- completed:
+    hackage: validation-selective-0.2.0.0@sha256:a88df9c19a26509fc4b8098b2e110336efda7e4bc0389dd58bcf327e1726005e,3917
+    pantry-tree:
+      sha256: 82a8a83073ac0a360b72c27a8fb6952b4566a20d1ea389b65f738303423177da
+      size: 697
+  original:
+    hackage: validation-selective-0.2.0.0
 snapshots:
 - completed:
     sha256: 238fa745b64f91184f9aa518fe04bdde6552533d169b0da5256670df83a0f1a9

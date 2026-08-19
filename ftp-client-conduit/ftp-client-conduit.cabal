@@ -63,6 +63,10 @@ library
       ghc-options: -Wincomplete-export-warnings -Wmissing-poly-kind-signatures -Wterm-variable-capture
     if impl (ghc >= 9.10)
       ghc-options: -Wdefaulted-exception-context
+    if impl (ghc >= 9.6)
+      ghc-options: -fplugin Henforcer
+      build-depends:
+          henforcer
 
 test-suite ftp-conduit-test
   type: exitcode-stdio-1.0
