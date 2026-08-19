@@ -1,5 +1,11 @@
 # Changelog for ftp-client
 
+## 0.5.3.1
+
+* Enable the `henforcer` plugin and `fourmolu` under the `ci` flag. Imports are
+  now qualified per the house style and the source is fourmolu formatted;
+  neither changes the API.
+
 ## 0.5.3.0
 
 * Export `acct`, `pbsz`, `prot`, `ccc` and `auth`. These command wrappers were

@@ -1,5 +1,14 @@
 # Changelog for ftp-client-conduit
 
+## 0.5.0.8
+
+* Enable the `henforcer` plugin and `fourmolu` under the `ci` flag. Imports are
+  now qualified per the house style and the source is fourmolu formatted;
+  neither changes the API.
+
+* Correct the Haddock module header, which named `Network.FTP.Client` rather
+  than `Network.FTP.Client.Conduit`.
+
 ## 0.5.0.7
 
 * Add the missing upper bounds on `bytestring`, `conduit` and `exceptions`.
