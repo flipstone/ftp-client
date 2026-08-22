@@ -2,6 +2,10 @@ name: Build and Test
 
 on:
   push:
+  # Fork pull requests produce no push event in this repository, so without this
+  # trigger they get no checks at all. Same-repo pull requests are filtered out
+  # per job below, because their push event already covers them.
+  pull_request:
 
 defaults:
   run:
@@ -14,6 +18,9 @@ concurrency:
 jobs:
   find-stack-yamls:
     name: Find stack.yamls for GHC Matrix
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     outputs:
       stack-yamls: ${{ steps.set-output.outputs.stack-yamls }}
@@ -24,6 +31,9 @@ jobs:
 
   build:
     name: Build and Test
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name != github.repository
     needs: find-stack-yamls
     runs-on: ubuntu-24.04
     strategy:
@@ -56,6 +66,9 @@ jobs:
 
   cabal-check:
     name: Cabal Check
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -73,6 +86,9 @@ jobs:
 
   shellcheck:
     name: shellcheck
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -88,6 +104,9 @@ jobs:
 
   cabal-latest-build:
     name: Cabal Build
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name != github.repository
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
