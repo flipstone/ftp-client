@@ -108,14 +108,14 @@ main = hspec $ do
                 , C.pack "220 Third Line\r\n"
                 ] Clear
             getResponse h `shouldReturn` expected
-        it "stops when the server hangs up during a multiline response" $ do
-            let expected = FTPResponse
-                    F.Success 220
-                    (MultiLine [C.pack "First Line"])
+        it "rejects a multiline response the server never finished" $ do
+            -- Terminating rather than hanging is only half of it. Handing back
+            -- the fragment would report a successful 220 for a greeting that
+            -- was cut off, against a control connection that is already gone.
             (TestHandle _ h) <- testHandle []
                 [ C.pack "220-First Line\r\n"
                 ] Clear
-            getResponse h `shouldReturn` expected
+            getResponse h `shouldThrow` isBadProtocolResponse
     describe "Network.FTP.Client.recvAll" $
         it "doesn't hang on empty response" $ do
             let expected = C.pack ""

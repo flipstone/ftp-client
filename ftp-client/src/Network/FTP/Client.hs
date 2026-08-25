@@ -285,12 +285,18 @@ loopMultiLine
 loopMultiLine h code lines = do
     mNextLine <- liftIO $ getLineRespMaybe h
     case mNextLine of
-        -- The server hung up before sending the terminating line. Return what
-        -- was collected rather than looping forever. Note this is end of input,
-        -- not a blank line: RFC 959 lets the intermediate lines of a multiline
-        -- reply hold arbitrary text, blank lines included, so a blank line has
-        -- to be kept and the loop has to continue past it.
-        Nothing -> return lines
+        -- The server hung up before sending the terminating line. Stop rather
+        -- than looping forever, but treat the reply as bad rather than
+        -- returning it: what was collected is a fragment, and handing it back
+        -- would turn a truncated reply into a well formed one. A cut off "220-"
+        -- greeting would read as a successful 220 and let 'withFTP' carry on
+        -- against a control connection that is already gone.
+        --
+        -- This is end of input, not a blank line. RFC 959 lets the intermediate
+        -- lines of a multiline reply hold arbitrary text, blank lines included,
+        -- so a blank line has to be kept and the loop has to continue past it.
+        Nothing -> liftIO $ throwIO $ BadProtocolResponseException
+            $ C.intercalate "\n" lines
         Just nextLine -> do
             let newLines = lines <> [C.dropWhile (== ' ') nextLine]
                 nextCode = C.take 3 nextLine

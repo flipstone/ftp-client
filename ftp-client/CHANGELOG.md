@@ -9,8 +9,11 @@
 
 * Fix a hang when the server closes the connection partway through a multiline
   response. The read loop had no terminating condition other than the closing
-  code, so it never returned. It now stops on an exhausted stream and returns the
-  lines received, matching the existing behaviour of `recvAll`.
+  code, so it never returned. An exhausted stream now raises
+  `BadProtocolResponseException`. The loop terminates, and a reply the server
+  never finished is reported as bad rather than handed back as though it were
+  complete -- which would have let a truncated `220-` greeting read as a
+  successful 220 and let `withFTP` proceed against a dead control connection.
 
 ## 0.5.1.7
 
