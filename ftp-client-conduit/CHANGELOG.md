@@ -9,6 +9,12 @@
   `mlsd`. The type variables are left free, so the exported types are unchanged
   -- `Producer m o` is `forall i. ConduitT i o m ()`, not `ConduitT () o m ()`.
 
+* Raise the `conduit` lower bound to `>= 1.3`. `ConduitT` arrived in conduit
+  1.3, so the previous `>= 1.1` allowed dependency selections that cannot
+  compile the signatures above. The bounds audit only added the missing upper
+  halves; this is the lower half that replacing `Producer` and `Consumer`
+  invalidated.
+
 ## 0.5.0.6
 
 * Correct the `resourcet` bound. `>= 1.2 && < 1.3` excluded `resourcet-1.3.0`,
