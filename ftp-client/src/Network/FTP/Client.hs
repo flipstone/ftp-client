@@ -129,9 +129,9 @@ instance Show FTPMessage where
 -- | Response from an FTP command. ex "200 Welcome!"
 data FTPResponse = FTPResponse
   { frStatus :: ResponseStatus
-  -- ^ Interpretation of the first AC.digit of an FTP response code
+  -- ^ Interpretation of the first digit of an FTP response code
   , frCode :: Int
-  -- ^ The three AC.digit response code
+  -- ^ The three digit response code
   , frMessage :: FTPMessage
   -- ^ Text of the response
   }
@@ -140,7 +140,7 @@ data FTPResponse = FTPResponse
 instance Show FTPResponse where
   show fr = show (frCode fr) <> " " <> show (frMessage fr)
 
--- | First AC.digit of an FTP response
+-- | First digit of an FTP response
 data ResponseStatus
   = -- | 1
     Wait

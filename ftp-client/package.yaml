@@ -20,6 +20,9 @@ tested-with:
 extra-source-files:
   - README.md
   - CHANGELOG.md
+  # A compile time input whenever the ci flag turns the henforcer plugin on,
+  # so an sdist without it would build without the rules it configures.
+  - henforcer.toml
 
 git: https://github.com/flipstone/ftp-client
 
