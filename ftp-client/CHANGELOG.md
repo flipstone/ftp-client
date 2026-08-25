@@ -27,9 +27,14 @@ deliberately.
   `createTLSConnection`, `withTLSHandle` and `tlsHandleImpl` take the settings
   or context they need.
 
-* Reply lines are now length limited. `connectionGetLine` was called with
-  `maxBound`, so a server that never sent a newline could exhaust memory before
-  authentication.
+* Reply lines are now length limited on both control connections.
+  `connectionGetLine` was called with `maxBound`, so a server that never sent a
+  newline could exhaust memory before authentication. The clear-channel handle
+  used unbounded `hGetLine`, which left `withFTP` replies -- and the plaintext
+  greeting and `AUTH TLS` reply that `createTLSConnection` reads before
+  authenticating -- without any limit at all. Both now apply
+  `maxReplyLineLength`, which is exported, and raise
+  `Network.Connection.LineTooLong` past it.
 
 * IO failures during a transfer are no longer reported as a completed one.
   `recvAll`, `getAllLineResp` and `getMlsxResponse` turned any `IOError` into a
@@ -46,6 +51,14 @@ deliberately.
   server's completion reply. Left unread it became the answer to the next
   command, and every reply after that belonged to the previous command.
 
+  That drain is now conditional on a completion reply actually being pending.
+  A transfer the server rejects outright -- `PBSZ`, `PROT`, `PASV` or the
+  transfer command itself -- fails with its error reply already consumed, and
+  nothing further is coming, so draining blocked until the server gave up on
+  the connection. `PendingCompletion`, `newPendingCompletion` and
+  `drainPendingCompletion` are exported, and `createSendDataCommand` and
+  `createTLSSendDataCommand` take a `PendingCompletion`.
+
 * `TYPE A` transfers now send CRLF as RFC 959 requires. `sendType TA` doubled a
   CR that was already there and appended a record the input did not have, and
   `sendLine` sent a bare LF.
@@ -55,7 +68,8 @@ deliberately.
   desynchronise -- and `auth` on its own tells the server to expect a handshake
   that never happens. Both remain reachable as `FTPCommand` constructors.
 
-* `getLineRespMaybe`, `getAllLineResp` and `toNetworkAscii` are now exported.
+* `getLineRespMaybe`, `getAllLineResp`, `toNetworkAscii` and
+  `maxReplyLineLength` are now exported.
 
 ## 0.5.3.1
 

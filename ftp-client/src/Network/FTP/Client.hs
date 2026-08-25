@@ -71,6 +71,7 @@ module Network.FTP.Client
   , getLineResp
   , getAllLineResp
   , getLineRespMaybe
+  , maxReplyLineLength
   , toNetworkAscii
   , requireTLSContext
   , getResponse
@@ -78,6 +79,9 @@ module Network.FTP.Client
   , sendCommandLine
   , createSendDataCommand
   , createTLSSendDataCommand
+  , PendingCompletion
+  , newPendingCompletion
+  , drainPendingCompletion
   , parseMlsxLine
   ) where
 
@@ -95,13 +99,14 @@ import qualified Data.ByteString as B
 import qualified Data.ByteString.Char8 as C
 import Data.ByteString.Lazy.Internal (defaultChunkSize)
 import Data.Default.Class (def)
+import Data.IORef (IORef, newIORef, readIORef, writeIORef)
 import Data.List (intercalate)
 import Data.Map.Strict (Map)
 import qualified Data.Map.Strict as Map
 import qualified Network.Connection as Connection
 import qualified Network.Socket as S
 import qualified System.IO as SIO
-import System.IO.Error (isEOFError)
+import System.IO.Error (eofErrorType, isEOFError, mkIOError)
 
 debugging :: Bool
 debugging = False
@@ -281,12 +286,46 @@ serializeCommand Pasv = "PASV"
 serializeCommand Quit = "QUIT"
 
 {- | Cap on one reply line. RFC 959 replies are short; this exists so a server
-that never sends a newline cannot make us buffer without limit. Exceeding it
-raises 'Connection.LineTooLong', which is not an 'IOError' and so is not
-swallowed by the end-of-input handling elsewhere in this module.
+that never sends a newline cannot make us buffer without limit. It applies to
+both control connections: 'Connection.connectionGetLine' takes it directly, and
+'hGetLineBounded' applies it to a clear handle. Exceeding it raises
+'Connection.LineTooLong', which is not an 'IOError' and so is not swallowed by
+the end-of-input handling elsewhere in this module.
 -}
 maxReplyLineLength :: Int
 maxReplyLineLength = 65536
+
+{- | 'C.hGetLine' with a bound, for handles that 'Network.Connection' is not
+managing. Reads a byte at a time rather than in chunks because 'recv' shares
+the handle: anything taken past the newline would be stolen from the data the
+caller asks for next. The handle is buffered, so this is not a syscall per
+byte, and reply lines are short.
+
+End of input is reported the way 'C.hGetLine' reports it, because
+'getLineRespMaybe' relies on the distinction: throw when nothing has been read
+yet, hand back the partial line when something has.
+-}
+hGetLineBounded :: Int -> SIO.Handle -> IO ByteString
+hGetLineBounded limit h =
+  let
+    collect :: Int -> [ByteString] -> IO ByteString
+    collect remaining acc
+      | remaining <= 0 = Exception.throwIO Connection.LineTooLong
+      | otherwise = do
+          byte <- B.hGet h 1
+          if B.null byte
+            then
+              if null acc
+                then
+                  Exception.throwIO $
+                    mkIOError eofErrorType "hGetLineBounded" (Just h) Nothing
+                else return $ B.concat (reverse acc)
+            else
+              if byte == C.singleton '\n'
+                then return $ B.concat (reverse acc)
+                else collect (remaining - 1) (byte : acc)
+  in
+    collect limit []
 
 stripCLRF :: ByteString -> ByteString
 stripCLRF = C.takeWhile $ (&&) <$> (/= '\r') <*> (/= '\n')
@@ -503,7 +542,7 @@ sIOHandleImpl h =
     , -- RFC 959 TYPE A data uses CRLF, not a bare LF
       sendLine = \s -> C.hPut h (s <> "\r\n")
     , recv = C.hGetSome h
-    , recvLine = C.hGetLine h
+    , recvLine = hGetLineBounded maxReplyLineLength h
     , security = Clear
     }
 
@@ -600,11 +639,15 @@ createSendDataCommand ::
   (MIO.MonadIO m, MonadMask m) =>
   Handle ->
   PortActivity ->
+  PendingCompletion ->
   FTPCommand ->
   m SIO.Handle
-createSendDataCommand h pa cmd = withDataSocket pa h $ \socket -> do
+createSendDataCommand h pa pending cmd = withDataSocket pa h $ \socket -> do
   resp <- sendCommand h cmd
   ensureSucessfulData h resp
+  -- Past this point the server has accepted the transfer, so a completion
+  -- reply is owed to us however the rest of it goes.
+  markCompletionPending pending
   acceptedSock <- acceptData pa socket
   MIO.liftIO $ S.socketToHandle acceptedSock SIO.ReadWriteMode
 
@@ -619,12 +662,13 @@ withDataCommand ::
   m a
 withDataCommand ch pa code cmd f = do
   _ <- sendCommandS ch $ RType code
+  pending <- newPendingCompletion
   x <-
     M.bracket
-      (createSendDataCommand ch pa cmd)
+      (createSendDataCommand ch pa pending cmd)
       (MIO.liftIO . SIO.hClose)
       (f . sIOHandleImpl)
-      `M.onException` drainDataResponse ch
+      `M.onException` drainPendingCompletion ch pending
   resp <- getResponse ch
   debugResponse resp
   return x
@@ -811,6 +855,40 @@ drainDataResponse :: (MIO.MonadIO m, MonadCatch m) => Handle -> m ()
 drainDataResponse ch =
   Monad.void (getResponse ch) `M.catchAll` (\_ -> return ())
 
+{- | Whether the server has accepted the preliminary reply to a transfer
+command, and so whether a completion reply is on its way.
+
+A transfer that is rejected outright -- @PBSZ@, @PROT@, @PASV@ or the transfer
+command itself -- fails with its error reply already consumed by
+'ensureSucessfulData', and nothing further is coming. Draining then waits for a
+reply the server will never send, which blocks until it gives up on the
+connection. Draining is only correct once this says a reply is pending.
+-}
+newtype PendingCompletion = PendingCompletion (IORef Bool)
+
+newPendingCompletion :: MIO.MonadIO m => m PendingCompletion
+newPendingCompletion =
+  MIO.liftIO $ PendingCompletion <$> newIORef False
+
+markCompletionPending :: MIO.MonadIO m => PendingCompletion -> m ()
+markCompletionPending (PendingCompletion ref) =
+  MIO.liftIO $ writeIORef ref True
+
+{- | 'drainDataResponse', but only when a completion reply is actually pending.
+
+This deliberately stays outside the bracket that owns the data connection. The
+server sends the completion reply once that connection has closed, so draining
+before the release action has run would block on a reply that is waiting on us.
+-}
+drainPendingCompletion ::
+  (MIO.MonadIO m, MonadCatch m) =>
+  Handle ->
+  PendingCompletion ->
+  m ()
+drainPendingCompletion ch (PendingCompletion ref) = do
+  pending <- MIO.liftIO $ readIORef ref
+  Monad.when pending $ drainDataResponse ch
+
 {- | Send setup commands to the server and
 create a data TLS connection
 -}
@@ -818,14 +896,19 @@ createTLSSendDataCommand ::
   (MIO.MonadIO m, MonadMask m) =>
   Handle ->
   PortActivity ->
+  PendingCompletion ->
   FTPCommand ->
   m Connection.Connection
-createTLSSendDataCommand ch pa cmd = do
+createTLSSendDataCommand ch pa pending cmd = do
   tlsContext <- requireTLSContext ch
   _ <- sendAllS ch [Pbsz 0, Prot P]
   withDataSocket pa ch $ \socket -> do
     resp <- sendCommand ch cmd
     ensureSucessfulData ch resp
+    -- Past this point the server has accepted the transfer, so a completion
+    -- reply is owed to us however the rest of it goes -- a rejected
+    -- certificate in the handshake below included.
+    markCompletionPending pending
     acceptedSock <- acceptData pa socket
     -- socketToHandle invalidates the socket, so the enclosing bracketOnError's
     -- close becomes a no-op from here on; protect the handle separately or a
@@ -856,12 +939,13 @@ withTLSDataCommand ::
 withTLSDataCommand ch pa code cmd f = do
   tlsContext <- requireTLSContext ch
   _ <- sendCommandS ch $ RType code
+  pending <- newPendingCompletion
   x <-
     M.bracket
-      (createTLSSendDataCommand ch pa cmd)
+      (createTLSSendDataCommand ch pa pending cmd)
       (MIO.liftIO . Connection.connectionClose)
       (f . tlsHandleImpl tlsContext)
-      `M.onException` drainDataResponse ch
+      `M.onException` drainPendingCompletion ch pending
   resp <- getResponse ch
   debugPrint $ "Recieved: " <> show resp
   return x

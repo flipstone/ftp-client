@@ -18,6 +18,11 @@ changelog for the security implications of that change.
   consumer terminates early. With `takeC`, `headC` or any short circuit it was
   skipped, and became the answer to the next command on the control connection.
 
+  It is also consumed when setting up the data connection fails after the
+  server has already accepted the transfer -- a rejected certificate on the
+  data channel handshake, for instance. `bracketP` runs no release action when
+  acquisition fails, so that reply was previously left queued.
+
 * `stor` in `TYPE A` mode now frames by line and sends CRLF. It appended a
   terminator to every awaited chunk, so uploading from `sourceFile` injected one
   at every chunk boundary, and it used a bare LF where RFC 959 requires CRLF.

@@ -23,6 +23,7 @@ module Network.FTP.Client.Conduit
 
 import Conduit ((.|))
 import qualified Conduit
+import qualified Control.Exception as Exception
 import qualified Control.Monad as Monad
 import qualified Control.Monad.IO.Class as MIO
 import Control.Monad.Trans.Resource (MonadResource)
@@ -34,7 +35,9 @@ import Network.FTP.Client
   , Security (..)
   , createSendDataCommand
   , createTLSSendDataCommand
+  , drainPendingCompletion
   , getResponse
+  , newPendingCompletion
   , parseMlsxLine
   , requireTLSContext
   , sIOHandleImpl
@@ -138,8 +141,16 @@ sourceDataCommand ch pa code cmd f = do
   -- a later statement. Downstream terminating early -- takeC, headC, any short
   -- circuit -- abandons this pipeline, and a reply left unread becomes the
   -- answer to the next command for the rest of the session.
+  -- bracketP runs no release action when acquisition itself fails, and part of
+  -- acquisition happens after the server has accepted the transfer. Draining
+  -- has to be attached to the acquire for those, or the completion reply is
+  -- left to become the answer to the next command.
   Conduit.bracketP
-    (createSendDataCommand ch pa cmd)
+    ( do
+        pending <- newPendingCompletion
+        createSendDataCommand ch pa pending cmd
+          `Exception.onException` drainPendingCompletion ch pending
+    )
     ( \dataHandle -> do
         SIO.hClose dataHandle
         getResponse ch >>= debugResponse
@@ -157,8 +168,15 @@ sourceTLSDataCommand ::
 sourceTLSDataCommand ch pa code cmd f = do
   tlsContext <- requireTLSContext ch
   _ <- sendCommandS ch $ RType code
+  -- As above, and this is the path where it bites hardest: the data channel
+  -- handshake runs after the preliminary reply, so a rejected certificate
+  -- closes the data socket with the completion reply still queued.
   Conduit.bracketP
-    (createTLSSendDataCommand ch pa cmd)
+    ( do
+        pending <- newPendingCompletion
+        createTLSSendDataCommand ch pa pending cmd
+          `Exception.onException` drainPendingCompletion ch pending
+    )
     ( \conn -> do
         Connection.connectionClose conn
         getResponse ch >>= debugResponse
