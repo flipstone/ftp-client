@@ -1,11 +1,15 @@
 module Main (main) where
 
 import Control.Concurrent.MVar
+import qualified Control.Exception as Exception
 import Data.ByteString (ByteString)
 import qualified Data.ByteString.Char8 as C
+import qualified Network.Connection as Connection
 import Network.FTP.Client hiding (Success)
 import qualified Network.FTP.Client as F
-import System.IO.Error (eofErrorType, mkIOError)
+import qualified System.Directory as Directory
+import qualified System.IO as SIO
+import System.IO.Error (eofErrorType, fullErrorType, isFullError, mkIOError)
 import Test.Hspec
 
 data TestHandleMVars = TestHandleMVars
@@ -62,6 +66,22 @@ nextScripted what scripted countMVar = do
   case drop i scripted of
     (x : _) -> return x
     [] -> ioError $ mkIOError eofErrorType what Nothing Nothing
+
+{- | A handle whose reads fail the way a reset connection does, rather than the
+way end of input does. The two must not be conflated: end of input is a
+complete transfer, a reset is a truncated one.
+-}
+failingHandle :: Security -> IO Handle
+failingHandle sec = do
+  (TestHandle _ h) <- testHandle [] [] sec
+  return
+    h
+      { recv = \_ -> ioError brokenConnection
+      , recvLine = ioError brokenConnection
+      }
+
+brokenConnection :: IOError
+brokenConnection = mkIOError fullErrorType "connection reset" Nothing Nothing
 
 main :: IO ()
 main = hspec $ do
@@ -205,12 +225,67 @@ main = hspec $ do
           ]
           Clear
       getResponse h `shouldThrow` isBadProtocolResponse
-  describe "Network.FTP.Client.recvAll" $
+  describe "Network.FTP.Client.recvAll" $ do
     it "doesn't hang on empty response" $ do
       let
         expected = C.pack ""
       (TestHandle _ h) <- testHandle [C.pack ""] [] Clear
       recvAll h `shouldReturn` expected
+    it "reports a broken connection instead of a short read" $ do
+      -- A failure part way through a transfer used to be turned into a clean
+      -- end of data, so a truncated download could not be told apart from a
+      -- complete one.
+      h <- failingHandle Clear
+      recvAll h `shouldThrow` isFullError
+  describe "Network.FTP.Client.getAllLineResp" $
+    it "reports a broken connection instead of a truncated listing" $ do
+      h <- failingHandle Clear
+      getAllLineResp h `shouldThrow` isFullError
+  describe "Network.FTP.Client.sIOHandleImpl" $ do
+    it "reads reply lines from a clear handle" $
+      withBytesHandle (C.pack "220 Welcome\r\n331 Password\r\n") $ \h -> do
+        getLineResp h `shouldReturn` C.pack "220 Welcome"
+        getLineResp h `shouldReturn` C.pack "331 Password"
+    it "hands back a final line the server never terminated" $
+      -- Matches hGetLine, which this replaces: bytes did arrive, so they are
+      -- the line, and end of input is reported on the read after it.
+      withBytesHandle (C.pack "220 Welcome") $ \h -> do
+        getLineResp h `shouldReturn` C.pack "220 Welcome"
+        getLineRespMaybe h `shouldReturn` Nothing
+    it "signals end of input once the stream is exhausted" $
+      withBytesHandle (C.pack "220 Welcome\r\n") $ \h -> do
+        _ <- getLineResp h
+        getLineRespMaybe h `shouldReturn` Nothing
+    it "refuses a reply line that exceeds the cap" $
+      -- A server that never sends a newline must not be able to make us
+      -- buffer without limit before we have even authenticated.
+      withBytesHandle (C.replicate (maxReplyLineLength + 1) 'x') $ \h ->
+        getLineResp h `shouldThrow` isLineTooLong
+  describe "Network.FTP.Client.toNetworkAscii" $ do
+    it "terminates LF input with CRLF" $
+      toNetworkAscii (C.pack "a\nb\n") `shouldBe` C.pack "a\r\nb\r\n"
+    it "leaves CRLF input unchanged rather than doubling the CR" $
+      toNetworkAscii (C.pack "a\r\nb\r\n") `shouldBe` C.pack "a\r\nb\r\n"
+    it "does not append a terminator the input did not have" $
+      toNetworkAscii (C.pack "a\nb") `shouldBe` C.pack "a\r\nb"
+
+{- | A real 'SIO.Handle' over fixed bytes. 'sIOHandleImpl' needs one, so the
+scripted 'Handle' above cannot reach it.
+-}
+withBytesHandle :: ByteString -> (Handle -> IO a) -> IO a
+withBytesHandle bytes use = do
+  tmp <- Directory.getTemporaryDirectory
+  Exception.bracket
+    (SIO.openBinaryTempFile tmp "ftp-client-test")
+    (\(path, h) -> SIO.hClose h >> Directory.removeFile path)
+    ( \(path, h) -> do
+        C.hPut h bytes
+        SIO.hClose h
+        SIO.withBinaryFile path SIO.ReadMode (use . sIOHandleImpl)
+    )
+
+isLineTooLong :: Connection.LineTooLong -> Bool
+isLineTooLong _ = True
 
 isBadProtocolResponse :: FTPException -> Bool
 isBadProtocolResponse e =

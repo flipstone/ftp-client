@@ -1,5 +1,34 @@
 # Changelog for ftp-client-conduit
 
+## 0.6.0.0
+
+Requires `ftp-client` 0.6, whose `withFTPS` now validates certificates. See its
+changelog for the security implications of that change.
+
+* IO failures during a transfer are no longer reported as a completed one.
+  `retr` and the listing sources turned any `IOError` into a clean end of
+  stream, so a reset connection wrote a truncated file and reported success.
+
+* A blank line no longer truncates a listing. `nlst`, `list` and `mlsd` stopped
+  at the first empty line and the caller still saw the normal completion reply,
+  so a short listing looked complete. This also brings the conduit `mlsd` into
+  agreement with `Network.FTP.Client.mlsd`, which skipped blank lines.
+
+* The server's completion reply is now consumed even when the downstream
+  consumer terminates early. With `takeC`, `headC` or any short circuit it was
+  skipped, and became the answer to the next command on the control connection.
+
+  It is also consumed when setting up the data connection fails after the
+  server has already accepted the transfer -- a rejected certificate on the
+  data channel handshake, for instance. `bracketP` runs no release action when
+  acquisition fails, so that reply was previously left queued.
+
+* `stor` in `TYPE A` mode now frames by line and sends CRLF. It appended a
+  terminator to every awaited chunk, so uploading from `sourceFile` injected one
+  at every chunk boundary, and it used a bare LF where RFC 959 requires CRLF.
+
+* Dropped the `exceptions` dependency, which is no longer used.
+
 ## 0.5.0.8
 
 * Enable the `henforcer` plugin and `fourmolu` under the `ci` flag. Imports are

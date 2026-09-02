@@ -1,5 +1,76 @@
 # Changelog for ftp-client
 
+## 0.6.0.0
+
+**Breaking change.** `withFTPS` now verifies the server's certificate chain and
+host name. Validation was previously disabled, and a caller had no way to enable
+it. Reported by @ysangkok in
+<https://github.com/flipstone/ftp-client/pull/1>, which proposed the same fix and
+was approved but closed unmerged; this completes that change.
+
+If you connect to a server whose certificate cannot be validated, that
+connection will now fail. Use the new `withFTPSSettings` with
+`settingDisableCertificateValidation` set to keep the previous behaviour
+deliberately.
+
+* `withFTPSSettings` takes `Connection.TLSSettings`, for callers who need to
+  choose their own.
+
+* Data connections now authenticate against the host the control connection was
+  opened to. They previously used the *local* end of the data socket, which no
+  server certificate can match. This is why enabling validation on the control
+  connection alone was not sufficient: PR #1 changed only that, and on its own
+  would have left every FTPS data transfer unable to validate.
+
+* `Security` now carries a `TLSContext` (settings, host, port) so a data
+  connection can reproduce the control connection's protection. `connectTLS`,
+  `createTLSConnection`, `withTLSHandle` and `tlsHandleImpl` take the settings
+  or context they need.
+
+* Reply lines are now length limited on both control connections.
+  `connectionGetLine` was called with `maxBound`, so a server that never sent a
+  newline could exhaust memory before authentication. The clear-channel handle
+  used unbounded `hGetLine`, which left `withFTP` replies -- and the plaintext
+  greeting and `AUTH TLS` reply that `createTLSConnection` reads before
+  authenticating -- without any limit at all. Both now apply
+  `maxReplyLineLength`, which is exported, and raise
+  `Network.Connection.LineTooLong` past it.
+
+* IO failures during a transfer are no longer reported as a completed one.
+  `recvAll`, `getAllLineResp` and `getMlsxResponse` turned any `IOError` into a
+  clean end of data, so a reset or timed-out connection produced a truncated
+  result that a caller could not distinguish from a whole one. End of input is
+  now distinguished from failure, and only end of input terminates a read.
+
+* Fixed three descriptor leaks: `createTLSConnection` on a refused greeting,
+  rejected `AUTH TLS` or failed handshake; the data handshake, where
+  `socketToHandle` had already invalidated the socket the release closed; and
+  the active-mode listening socket, which was never closed on success.
+
+* A data transfer that does not complete normally now still consumes the
+  server's completion reply. Left unread it became the answer to the next
+  command, and every reply after that belonged to the previous command.
+
+  That drain is now conditional on a completion reply actually being pending.
+  A transfer the server rejects outright -- `PBSZ`, `PROT`, `PASV` or the
+  transfer command itself -- fails with its error reply already consumed, and
+  nothing further is coming, so draining blocked until the server gave up on
+  the connection. `PendingCompletion`, `newPendingCompletion` and
+  `drainPendingCompletion` are exported, and `createSendDataCommand` and
+  `createTLSSendDataCommand` take a `PendingCompletion`.
+
+* `TYPE A` transfers now send CRLF as RFC 959 requires. `sendType TA` doubled a
+  CR that was already there and appended a record the input did not have, and
+  `sendLine` sent a bare LF.
+
+* `ccc` and `auth` are removed. CCC cannot work here -- there is no way to
+  downgrade our side of the connection, so the control connection would
+  desynchronise -- and `auth` on its own tells the server to expect a handshake
+  that never happens. Both remain reachable as `FTPCommand` constructors.
+
+* `getLineRespMaybe`, `getAllLineResp`, `toNetworkAscii` and
+  `maxReplyLineLength` are now exported.
+
 ## 0.5.3.1
 
 * Enable the `henforcer` plugin and `fourmolu` under the `ci` flag. Imports are

@@ -5,7 +5,7 @@ cabal-version: 1.12
 -- see: https://github.com/sol/hpack
 
 name:           ftp-client
-version:        0.5.3.1
+version:        0.6.0.0
 synopsis:       Transfer files with FTP and FTPS
 description:    ftp-client is a library for communicating with an FTP server. It works over both a clear channel or TLS.
 category:       Web
@@ -80,6 +80,8 @@ test-suite ftp-client-test
   build-depends:
       base >=4.16 && <5
     , bytestring >=0.10.8.2 && <0.13
+    , crypton-connection >=0.3 && <0.5
+    , directory ==1.3.*
     , ftp-client
     , hspec >=2.7
   default-language: Haskell2010
