@@ -66,7 +66,7 @@ library:
         # Previously the guidance was to always use ticked constructors for type
         # constructors, but that guidance has been reversed, so we turn the
         # warning off in older compilers.
-        - condition: impl (ghc <= 9.3)
+        - condition: impl (ghc < 9.4)
           ghc-options:
             - -Wno-unticked-promoted-constructors
         - condition: impl (ghc >= 9.4)
@@ -117,7 +117,7 @@ tests:
             # Previously the guidance was to always use ticked constructors for type
             # constructors, but that guidance has been reversed, so we turn the
             # warning off in older compilers.
-            - condition: impl (ghc <= 9.3)
+            - condition: impl (ghc < 9.4)
               ghc-options:
                 - -Wno-unticked-promoted-constructors
             - condition: impl (ghc >= 9.4)

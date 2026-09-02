@@ -49,7 +49,7 @@ executables:
             - -Wno-unsafe
             - -Wunused-packages
           when:
-            - condition: impl (ghc <= 9.3)
+            - condition: impl (ghc < 9.4)
               ghc-options:
                 - -Wno-unticked-promoted-constructors
             - condition: impl (ghc >= 9.4)
@@ -99,7 +99,7 @@ tests:
             - -Wno-safe
             - -Wno-unsafe
           when:
-            - condition: impl (ghc <= 9.3)
+            - condition: impl (ghc < 9.4)
               ghc-options:
                 - -Wno-unticked-promoted-constructors
             - condition: impl (ghc >= 9.4)
