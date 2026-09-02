@@ -1,4 +1,8 @@
 <<: !include stack-base.yaml
 
 resolver: nightly-2026-08-16
-extra-deps: []
+# henforcer is not in any snapshot. It is only active on GHC >= 9.6, so the
+# 9.2 and 9.4 rungs do not carry it.
+extra-deps:
+  - henforcer-1.0.0.1
+  - pollock-0.1.0.3

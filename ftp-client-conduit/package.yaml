@@ -1,5 +1,5 @@
 name:                ftp-client-conduit
-version:             0.5.0.7
+version:             0.5.0.8
 synopsis:            Transfer file with FTP and FTPS with Conduit
 description:         ftp-client is a library for communicating with an FTP server. It works over both a clear channel or TLS. ftp-client-conduit uses conduit to stream files and data in constant space.
 homepage:            https://github.com/flipstone/ftp-client
@@ -20,6 +20,9 @@ tested-with:
 extra-source-files:
   - README.md
   - CHANGELOG.md
+  # A compile time input whenever the ci flag turns the henforcer plugin on,
+  # so an sdist without it would build without the rules it configures.
+  - henforcer.toml
 
 git: https://github.com/flipstone/ftp-client
 
@@ -82,6 +85,11 @@ library:
         - condition: impl (ghc >= 9.10)
           ghc-options:
             - -Wdefaulted-exception-context
+        - condition: impl (ghc >= 9.6)
+          dependencies:
+            - henforcer
+          ghc-options:
+            - -fplugin Henforcer
 
 tests:
   ftp-conduit-test:
